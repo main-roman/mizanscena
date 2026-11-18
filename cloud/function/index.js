@@ -37,7 +37,7 @@ async function q(text, params = {}) {
 const U = TypedValues.utf8, U64 = TypedValues.uint64, TS = TypedValues.timestamp;
 
 // ---------- ответы ----------
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Miz-Session', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 const json = (code, data) => ({ statusCode: code, headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify(data) });
 class Fail extends Error { constructor(code, msg) { super(msg); this.code = code; } }
 
@@ -48,8 +48,10 @@ function issue(uid) {
   return `${body}.${sign(body)}`;
 }
 function who(event) {
-  const h = event.headers || {};
-  const t = String(h.Authorization || h.authorization || '').replace(/^Bearer\s+/i, '');
+  // пропуск идёт в своём заголовке: Authorization облако может принять за свой служебный токен
+  const h = {};
+  for (const [k, v] of Object.entries(event.headers || {})) h[k.toLowerCase()] = v;
+  const t = String(h['x-miz-session'] || h.authorization || '').replace(/^Bearer\s+/i, '');
   const [uid, exp, sig] = t.split('.');
   if (!uid || !exp || !sig) throw new Fail(401, 'Нужно войти');
   const good = sign(`${uid}.${exp}`);

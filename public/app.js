@@ -1,6 +1,7 @@
 // Точка входа: переходы между экранами, список проектов и страница проекта.
 import { storage } from './storage.js';
-import { store, $, $$, esc, toast, pickFile, createProject, exportProjectFile, importProjectFile, scenesOf } from './store.js';
+import { store, $, $$, esc, toast, pickFile, createProject, copyToCloud, exportProjectFile, importProjectFile, scenesOf } from './store.js';
+import { cloud, isCloud } from './cloud.js';
 import { planSVG } from './shapes.js';
 import { mountPlan, unmountPlan, createPlan } from './plan.js';
 import { mountScript, unmountScript, scriptStats, printScript, toFountain, loadScriptInto, SCRIPT_FILES } from './script.js';
@@ -15,7 +16,11 @@ store.onStatus = (text, bad = false) => {
   el.textContent = text;
   el.classList.toggle('bad', bad);
 };
-store.onRemote = () => { route(true); toast('Проект обновлён из файла'); };
+store.onRemote = (p, why) => {
+  route(true);
+  toast(why === 'cloud' ? 'Пришли правки соавтора' : why === 'merge' ? 'Ваши правки объединены с правками соавтора' : 'Проект обновлён из файла');
+};
+cloud.onAuth = () => { if (current === 'home') renderHome(); };
 store.onList = () => { if (current === 'home') renderHome(); };
 
 function show(name, title, back) {
@@ -91,11 +96,57 @@ async function renderHome() {
     <p class="home-where">${storage.mode === 'server'
       ? `Проекты лежат на этом компьютере в папке <b>${esc(dataDir || 'projects')}</b>${window.mizDesktop && window.mizDesktop.openData ? ' <button class="linkbtn" id="h-folder">Открыть папку</button>' : ''}.${appVersion ? ` Версия программы ${esc(appVersion)}.` : ''}${lanUrls.length ? ` На телефоне в той же сети Wi-Fi откройте ${lanUrls.map(u => `<b>${u}</b>`).join(' или ')}: там те же проекты, правки видны сразу на обоих устройствах.` : ''}`
       : 'Сервер не запущен, поэтому проекты хранятся только в этом браузере. Сохраняйте проект в файл, чтобы не потерять работу.'}</p>
+    <section class="cloud" id="cloud"></section>
   </div>`;
+  renderCloud();
+}
+
+// ---------- облако на главном экране ----------
+
+const ROLE = { owner: 'ваш проект', editor: 'можно править', viewer: 'только просмотр' };
+
+async function renderCloud() {
+  const el = $('#cloud');
+  if (!el) return;
+  if (!cloud.signedIn) {
+    el.innerHTML = `<header class="home-head"><h2>Облако</h2></header>
+      <p class="cloud-about">Проекты в облаке открываются на любом компьютере и телефоне, над ними можно работать вместе: правки соавторов приходят через несколько секунд. Данные хранятся в России, в Yandex Cloud.</p>
+      <button class="act ya" id="c-login"><span class="ya-y">Я</span>Войти через Яндекс ID</button>`;
+    return;
+  }
+  const u = cloud.user;
+  el.innerHTML = `<header class="home-head"><h2>Облако</h2>
+      <div class="home-actions"><button class="act main" id="c-new">Новый проект в облаке</button><button class="act" id="c-join">У меня приглашение</button></div></header>
+    <p class="cloud-user">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : ''}<span>${esc(u.name)}${u.email ? ` <i>${esc(u.email)}</i>` : ''}</span><button class="linkbtn" id="c-logout">Выйти</button></p>
+    <div class="home-grid" id="c-grid"><p class="home-empty">Загружаю…</p></div>`;
+  let list;
+  try { list = await cloud.list(); } catch (e) { const g = $('#c-grid'); if (g) g.innerHTML = `<p class="home-empty">${esc(e.message)}</p>`; return; }
+  const grid = $('#c-grid');
+  if (!grid) return;
+  const date = ms => ms ? new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  grid.innerHTML = list.length ? list.sort((a, b) => b.updated - a.updated).map(p => `<a class="tile" href="#/p/${p.id}">
+      <span class="thumb cloud-thumb"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 9.1 4.5 4.5 0 0 0 7 18z"/></svg></span>
+      <span class="tile-name">${esc(p.name)}</span>
+      <span class="tile-meta">${[date(p.updated), ROLE[p.role] || ''].filter(Boolean).join(', ')}</span></a>`).join('')
+    : `<p class="home-empty">В облаке пока нет проектов. Создайте новый или перенесите локальный: откройте его и нажмите «Перенести в облако».</p>`;
+}
+
+async function cloudLogin() {
+  try { return await cloud.login(); }
+  catch (e) { toast(e.message || 'Не получилось войти'); return false; }
 }
 
 $('#view-home').addEventListener('click', async e => {
   if (e.target.closest('#h-folder')) { window.mizDesktop.openData(); return; }
+  if (e.target.closest('#c-login')) { if (await cloudLogin()) toast('Вы вошли: ' + cloud.user.name); return; }
+  if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); renderHome(); } return; }
+  if (e.target.closest('#c-new')) { try { location.hash = `#/p/${await createProject(null, true)}`; } catch (err) { toast(err.message); } return; }
+  if (e.target.closest('#c-join')) {
+    const code = (prompt('Вставьте приглашение (код или всё сообщение целиком)') || '').match(/[\w-]{10,}/g);
+    if (!code) return;
+    try { location.hash = `#/p/${await cloud.join(code[code.length - 1])}`; toast('Вы в проекте'); } catch (err) { toast(err.message); }
+    return;
+  }
   if (e.target.closest('#h-new')) location.hash = `#/p/${await createProject()}`;
   if (e.target.closest('#h-open')) {
     const file = await pickFile('.mizproj,.json,application/json');
@@ -132,7 +183,10 @@ function renderProject() {
         <button class="act main" data-act="file">Сохранить проект в файл</button>
         <button class="act" data-act="import-script">Загрузить сценарий: Word, PDF, Fountain</button>
       </div>
-      <p class="where">Проект сохраняется сам после каждой правки. Файл .mizproj нужен, чтобы перенести проект на другое устройство или сделать копию.</p>
+      <p class="where">${isCloud(p.id) ? 'Проект в облаке: сохраняется сам и открывается на всех ваших устройствах.' : 'Проект сохраняется сам после каждой правки. Файл .mizproj нужен, чтобы перенести проект на другое устройство или сделать копию.'}</p>
+      ${isCloud(p.id) ? `<p class="sub">Совместная работа</p><div class="members" id="members"><p class="where">Загружаю участников…</p></div>
+      ${cloud.role(p.id) !== 'viewer' ? `<div class="actions"><button class="act" data-act="invite-edit">Пригласить: может править</button><button class="act" data-act="invite-view">Пригласить: только смотреть</button></div>` : ''}`
+      : `<div class="actions"><button class="act" data-act="to-cloud">Перенести в облако</button></div>`}
       <p class="sub">Экспорт</p>
       <div class="actions">
         <button class="act" data-act="script-pdf">Сценарий, PDF</button>
@@ -140,9 +194,30 @@ function renderProject() {
         <button class="act" data-act="dir-pdf">Режиссёрский сценарий, PDF</button>
         <button class="act" data-act="dir-csv">Режиссёрский сценарий, Excel</button>
       </div>
-      <div class="actions proj-danger"><button class="act danger" data-act="remove">Удалить проект</button></div>
+      ${!isCloud(p.id) || cloud.role(p.id) === 'owner' ? '<div class="actions proj-danger"><button class="act danger" data-act="remove">Удалить проект</button></div>' : ''}
     </div>
   </div>`;
+  if (isCloud(p.id)) renderMembers(p.id);
+}
+
+async function renderMembers(id) {
+  let list;
+  try { list = await cloud.members(id); } catch { return; }
+  const el = $('#members');
+  if (!el || !store.project || store.project.id !== id) return;
+  const owner = cloud.role(id) === 'owner', me = cloud.user && cloud.user.id;
+  el.innerHTML = list.map(m => `<div class="member">${m.avatar ? `<img src="${esc(m.avatar)}" alt="">` : '<span class="member-pic"></span>'}
+    <span class="member-name">${esc(m.name)}${m.id === me ? ' (вы)' : ''}<i>${m.role === 'owner' ? 'владелец' : ROLE[m.role] || ''}</i></span>
+    ${owner && m.id !== me ? `<button class="linkbtn" data-kick="${esc(m.id)}" data-name="${esc(m.name)}">Убрать</button>` : ''}</div>`).join('');
+}
+
+async function invite(p, role) {
+  try {
+    const { code } = await cloud.invite(p.id, role);
+    const text = `Приглашаю в проект «${p.name}» в Мизансцене (${role === 'viewer' ? 'просмотр' : 'можно править'}). Откройте программу, войдите через Яндекс ID, нажмите «У меня приглашение» и вставьте код: ${code}`;
+    await navigator.clipboard.writeText(text).catch(() => {});
+    prompt('Приглашение скопировано, отправьте его соавтору. Действует 14 дней.', text);
+  } catch (e) { toast(e.message); }
 }
 
 $('#view-project').addEventListener('change', e => {
@@ -155,6 +230,12 @@ $('#view-project').addEventListener('change', e => {
 });
 $('#view-project').addEventListener('click', async e => {
   const p = store.project;
+  const kick = e.target.closest('[data-kick]');
+  if (kick) {
+    if (!confirm(`Убрать ${kick.dataset.name} из проекта?`)) return;
+    try { await cloud.kick(p.id, kick.dataset.kick); renderMembers(p.id); } catch (err) { toast(err.message); }
+    return;
+  }
   if (e.target.closest('#plan-new')) { location.hash = `#/p/${p.id}/plan/${createPlan()}`; return; }
   const act = (e.target.closest('button') || {}).dataset?.act;
   if (!act) return;
@@ -173,13 +254,25 @@ $('#view-project').addEventListener('click', async e => {
   if (act === 'script-fountain') download(new Blob([toFountain(p)], { type: 'text/plain;charset=utf-8' }), safeName(p.name) + '.fountain');
   if (act === 'dir-pdf') printDirector(p);
   if (act === 'dir-csv') csvDirector(p);
+  if (act === 'invite-edit' || act === 'invite-view') return invite(p, act === 'invite-view' ? 'viewer' : 'editor');
+  if (act === 'to-cloud') {
+    if (!cloud.signedIn && !(await cloudLogin())) return;
+    toast('Переношу в облако…');
+    try {
+      await store.flush();
+      const id = await copyToCloud(p);
+      toast('Готово: копия в облаке. Этот проект остался на компьютере');
+      location.hash = `#/p/${id}`;
+    } catch (err) { toast(err.message || 'Не получилось'); }
+    return;
+  }
   if (act === 'remove') {
-    if (!confirm(`Удалить проект «${p.name}»?`)) return;
+    if (!confirm(`Удалить проект «${p.name}»?${isCloud(p.id) ? ' Он пропадёт у всех участников.' : ''}`)) return;
     clearTimeout(store.timer); store.timer = 0;
     await storage.remove(p.id);
     store.close();
     location.hash = '#/';
-    toast(storage.mode === 'server' ? 'Проект перенесён в projects/.trash' : 'Проект удалён');
+    toast(isCloud(p.id) ? 'Проект удалён из облака' : storage.mode === 'server' ? 'Проект перенесён в projects/.trash' : 'Проект удалён');
   }
 });
 

@@ -24,7 +24,7 @@ const EMPTY_ENTER = { scene: 'action', action: 'scene', character: 'action', dia
 
 let root = null, sheet = null, syncTimer = 0;
 
-const blockHTML = b => `<div data-type="${b.type}"${b.type === 'scene' && b.id ? ` data-id="${b.id}"` : ''}>${esc(b.text) || '<br>'}</div>`;
+const blockHTML = b => `<div data-type="${b.type}"${b.id ? ` data-id="${esc(b.id)}"` : ''}>${esc(b.text) || '<br>'}</div>`;
 
 export function mountScript(el) {
   root = el;
@@ -217,13 +217,11 @@ function sync() {
   const blocks = [...sheet.children].map(el => {
     const type = TYPES[el.dataset.type] ? el.dataset.type : 'action';
     const b = { type, text: el.textContent.replace(/[ ​]/g, ' ').replace(/\s+$/, '') };
-    if (type === 'scene') {
-      let id = el.dataset.id;
-      if (!id || seen.has(id)) { id = 'sc-' + uid(); el.dataset.id = id; }
-      seen.add(id);
-      b.id = id;
-    }
-    return b;
+    // у каждого блока свой id: так правки двух соавторов в разных местах сценария объединяются, а не затирают друг друга
+    let id = el.dataset.id;
+    if (!id || seen.has(id)) { id = (type === 'scene' ? 'sc-' : 'b-') + uid(); el.dataset.id = id; }
+    seen.add(id);
+    return { ...b, id };
   });
   const p = store.project;
   if (JSON.stringify(blocks) !== JSON.stringify(p.script.blocks)) { p.script.blocks = blocks; store.touch(); }

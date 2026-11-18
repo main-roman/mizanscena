@@ -6,6 +6,7 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from './vendor/utils/SkeletonUtils.js';
 import { mergeVertices } from './vendor/utils/BufferGeometryUtils.js';
 import { HDRLoader } from './vendor/jsm/loaders/HDRLoader.js';
+import { srcOf } from './storage.js';
 import { fov, bounds, height3d, LIGHTS, LIGHT, COLORS, CAM, LOOKS } from './shapes.js';
 
 const rad = d => d * Math.PI / 180;
@@ -561,7 +562,7 @@ export function create3D(host, hooks = {}) {
       g.rotation.y = -rad(o.rot || 0);
       g.userData.id = o.id;
       if (o.type === 'image') {
-        const tex = new THREE.TextureLoader().load(o.src, () => draw());
+        const tex = new THREE.TextureLoader().load(srcOf(o.src), () => draw());
         tex.colorSpace = THREE.SRGBColorSpace;
         const p = new THREE.Mesh(new THREE.PlaneGeometry(o.w, o.h), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: o.opacity ?? 0.6 }));
         p.rotation.x = -Math.PI / 2; p.position.y = 0.008;

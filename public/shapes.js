@@ -1,5 +1,6 @@
 // Условные знаки плана. Все размеры в метрах, знак смотрит вправо (rot = 0), поворот по часовой стрелке.
 // Оформление задаётся атрибутами, а не CSS, чтобы план одинаково выглядел в PNG и при печати.
+import { srcOf } from './storage.js';
 
 export const INK = '#1C2A30';
 export const PAPER = '#E8ECEA';
@@ -259,7 +260,7 @@ function body(o, icon = false) {
       return `<rect x="${-w / 2}" y="-0.09" width="${w}" height="0.18" fill="#CFE6F2" stroke="${INK}" stroke-width="${S}"/><path d="M${-w / 2} 0 H${w / 2}" stroke="${INK}" stroke-width="${S * 0.6}"/>`;
     }
     case 'image':
-      return `<image href="${esc(o.src)}" x="${-o.w / 2}" y="${-o.h / 2}" width="${o.w}" height="${o.h}" opacity="${o.opacity ?? 0.6}" preserveAspectRatio="none"/>`;
+      return `<image href="${esc(srcOf(o.src))}" x="${-o.w / 2}" y="${-o.h / 2}" width="${o.w}" height="${o.h}" opacity="${o.opacity ?? 0.6}" preserveAspectRatio="none"/>`;
   }
   return '';
 }

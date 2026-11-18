@@ -1,6 +1,6 @@
 // Shot Designer: план сцены сверху и его 3D-вид. Работает с одним планом открытого проекта.
 import { store, $, $$, uid, esc, reduced, toast, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, normalizePlan, SIZES, MOVES } from './store.js';
-import { storage } from './storage.js';
+import { storage, srcOf } from './storage.js';
 import { scrubField } from './ui.js';
 import { height3d, kelvinToHex, defaultKelvin, drawObject, drawIcon, gridPattern, extent, fov, caption, bounds, sorted, planSVG, emits, COLORS, SENSORS, FURN, FURN_CATS, LIGHTS, LIGHT, PAPER, LOOKS, POSES } from './shapes.js';
 
@@ -1240,9 +1240,9 @@ async function exportPNG() {
   // картинки-подложки встраиваем внутрь, иначе браузер не нарисует их в PNG
   for (const o of scene.objects.filter(q => q.type === 'image' && !q.src.startsWith('data:'))) {
     try {
-      const blob = await (await fetch(o.src)).blob();
+      const blob = await (await fetch(srcOf(o.src))).blob();
       const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
-      markup = markup.split(`href="${esc(o.src)}"`).join(`href="${data}"`);
+      markup = markup.split(`href="${esc(srcOf(o.src))}"`).join(`href="${data}"`);
     } catch { /* подложка просто не попадёт в картинку */ }
   }
   const img = new Image();
@@ -1347,7 +1347,7 @@ $('#cam-bar').addEventListener('click', async e => {
   if (s.frame && !confirm(`У кадра ${n} уже есть картинка в раскадровке. Заменить её?`)) return;
   try {
     const blob = await v3.snapshot();
-    s.frame = await storage.putAsset(`frame-${Date.now().toString(36)}${uid()}.jpg`, blob);
+    s.frame = await storage.putAsset(`frame-${Date.now().toString(36)}${uid()}.jpg`, blob, store.project.id);
     store.touch();
     renderCamBar();
     toast(`Кадр ${n} добавлен в раскадровку режиссёрского сценария`);

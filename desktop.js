@@ -20,6 +20,32 @@ if (TEST) {
 }
 ipcMain.handle('open-data', () => shell.openPath(path.join(process.env.MIZ_DATA, 'projects')));
 
+// ---------- вход через Яндекс ID ----------
+// Открывается страница Яндекса; после входа Яндекс переадресует на verification_code с токеном в адресе,
+// программа забирает токен и закрывает окошко. Пароль вводится только на странице Яндекса, программа его не видит.
+const YA_DONE = 'https://oauth.yandex.ru/verification_code';
+ipcMain.handle('yandex-login', (e, clientId) => new Promise(resolve => {
+  const owner = BrowserWindow.fromWebContents(e.sender);
+  const w = new BrowserWindow({
+    width: 520, height: 720, parent: owner, modal: true, title: 'Вход через Яндекс ID', autoHideMenuBar: true, backgroundColor: '#ffffff',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, partition: 'persist:yandex' },
+  });
+  let done = false;
+  const finish = token => { if (done) return; done = true; resolve(token); if (!w.isDestroyed()) w.close(); };
+  const check = url => {
+    if (!String(url).startsWith(YA_DONE)) return;
+    const params = new URLSearchParams(String(url).split('#')[1] || '');
+    finish(params.get('access_token') || null);
+  };
+  w.webContents.on('will-redirect', (_e, url) => check(url));
+  w.webContents.on('will-navigate', (_e, url) => check(url));
+  w.webContents.on('did-navigate', (_e, url) => check(url));
+  w.webContents.on('did-navigate-in-page', (_e, url) => check(url));
+  w.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  w.on('closed', () => finish(null));
+  w.loadURL(`https://oauth.yandex.ru/authorize?response_type=token&client_id=${encodeURIComponent(clientId)}&force_confirm=no`);
+}));
+
 // ---------- обновления ----------
 // Новые версии публикуются на GitHub (раздел Releases). Программа проверяет их при запуске и раз в 4 часа
 // и спрашивает, обновиться ли. На Windows обновление скачивается и ставится само.

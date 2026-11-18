@@ -1,5 +1,6 @@
 // Открытый проект в памяти, автосохранение и общие мелочи для всех экранов.
-import { storage, blobToData } from './storage.js';
+import { storage, blobToData, srcOf } from './storage.js';
+import { cloud, isCloud, merge } from './cloud.js';
 import { FURN, LIGHTS, esc } from './shapes.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
@@ -30,7 +31,7 @@ export function normalizeProject(p) {
   p.name = p.name || 'Без названия';
   p.script = p.script || {};
   p.script.blocks = Array.isArray(p.script.blocks) ? p.script.blocks : [];
-  for (const b of p.script.blocks) { b.type = b.type || 'action'; b.text = b.text || ''; if (b.type === 'scene' && !b.id) b.id = 'sc-' + uid(); }
+  for (const b of p.script.blocks) { b.type = b.type || 'action'; b.text = b.text || ''; if (!b.id) b.id = (b.type === 'scene' ? 'sc-' : 'b-') + uid(); }
   p.plans = Array.isArray(p.plans) ? p.plans : [];
   p.shots = Array.isArray(p.shots) ? p.shots : [];
   // старый формат: кадры лежали внутри плана
@@ -111,24 +112,67 @@ export const store = {
     if (this.timer) { clearTimeout(this.timer); await this.save(); }
   },
 
-  async save() {
+  // сохранения идут строго по очереди, иначе облако приняло бы второе за конфликт с первым
+  save() {
     this.timer = 0;
+    this.saving = (this.saving || Promise.resolve()).then(() => this.saveNow()).catch(() => {});
+    return this.saving;
+  },
+
+  async saveNow() {
     const p = this.project;
     if (!p) return;
     const s = JSON.stringify(p);
+    if (isCloud(p.id) && cloud.role(p.id) === 'viewer') { this.last = s; this.onStatus('Только просмотр: правки не сохраняются'); return; }
     // запоминаем отправленное, чтобы не принять собственное сохранение за правку файла снаружи
     this.sent.push(s);
     if (this.sent.length > 8) this.sent.shift();
     this.last = s;
     try {
-      await storage.put(p);
-      this.onStatus(storage.mode === 'server' ? 'Сохранено' : 'Сохранено в этом браузере');
-    } catch {
-      this.onStatus('Не сохранено: сервер не отвечает', true);
+      const merged = await storage.put(p);
+      if (merged && this.project === p) {
+        // пока сохраняли, проект правил кто-то ещё: берём объединённую версию, не теряя того, что я успел сделать за это время
+        const mineNow = JSON.parse(JSON.stringify(p));
+        const next = normalizeProject(same(mineNow, JSON.parse(s)) ? merged : merge(JSON.parse(s), mineNow, merged));
+        next.id = p.id;
+        this.project = next;
+        this.last = JSON.stringify(next);
+        this.onRemote(next, 'merge');
+        if (this.last !== JSON.stringify(merged)) this.touch();
+      }
+      this.onStatus(isCloud(p.id) ? 'Сохранено в облаке' : storage.mode === 'server' ? 'Сохранено' : 'Сохранено в этом браузере');
+    } catch (e) {
+      if (isCloud(p.id)) {
+        this.onStatus(e.code === 403 ? 'Нет доступа к проекту' : 'Не сохранено: нет связи с облаком, пробую снова', true);
+        if (e.code !== 403 && !this.timer && this.project === p) this.timer = setTimeout(() => this.save(), 5000);
+      } else this.onStatus('Не сохранено: сервер не отвечает', true);
     }
   },
 
+  // Облачный проект: раз в несколько секунд спрашиваем, не изменил ли его кто-то, и показываем свежую версию.
+  // Если у меня есть несохранённые правки, ничего не трогаем: при сохранении правки объединятся.
+  async pollCloud() {
+    const p = this.project;
+    if (!p || !isCloud(p.id) || document.hidden || this.polling) return;
+    this.polling = true;
+    try {
+      const v = await cloud.ver(p.id);
+      if (v <= cloud.version(p.id) || this.timer || this.project !== p) return;
+      await this.saving;
+      const r = await cloud.peek(p.id);
+      if (this.timer || this.project !== p || JSON.stringify(p) !== this.last || r.version <= cloud.version(p.id)) return;
+      cloud.accept(p.id, r.data, r.version);
+      const next = normalizeProject(r.data);
+      next.id = p.id;
+      this.project = next;
+      this.last = JSON.stringify(next);
+      this.onRemote(next, 'cloud');
+    } catch { /* нет связи: попробуем в следующий раз */ }
+    finally { this.polling = false; }
+  },
+
   watch() {
+    setInterval(() => this.pollCloud(), 4000);
     storage.watch(async ({ id }) => {
       if (!this.project || id !== this.project.id) { this.onList(); return; }
       if (this.timer) return;
@@ -148,12 +192,33 @@ export const store = {
   },
 };
 
-export async function createProject(data) {
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+export async function createProject(data, inCloud = false) {
   const p = normalizeProject(data || { name: 'Новый проект' });
+  p.created = p.created || new Date().toISOString();
+  if (inCloud) return cloud.create(p);
   p.id = 'p-' + Date.now().toString(36);
-  p.created = new Date().toISOString();
   await storage.put(p);
   return p.id;
+}
+
+// Копия локального проекта в облаке: картинки загружаются туда же. Локальный проект остаётся как был.
+export async function copyToCloud(p) {
+  const copy = normalizeProject(JSON.parse(JSON.stringify(p)));
+  delete copy.id;
+  const imgs = [];
+  eachImage(copy, (o, key) => { if (o[key] && !String(o[key]).startsWith('cloud:')) imgs.push([o, key]); });
+  // id проекта нужен для загрузки картинок, поэтому сначала создаём проект, потом кладём картинки и сохраняем ещё раз
+  const id = await cloud.create(imgs.length ? { ...copy, plans: [], shots: [], script: { blocks: [] } } : copy);
+  if (!imgs.length) return id;
+  for (const [o, key] of imgs) {
+    try { o[key] = await cloud.upload(id, await (await fetch(o[key])).blob()); } catch { /* картинку пропустим, проект важнее */ }
+  }
+  await cloud.get(id);
+  copy.id = id;
+  await cloud.put(copy);
+  return id;
 }
 
 // ---------- файл проекта: всё в одном, вместе с картинками ----------
@@ -168,8 +233,8 @@ export async function exportProjectFile(p) {
   delete copy.id;
   const jobs = [];
   eachImage(copy, (o, key) => {
-    if (!String(o[key]).startsWith('/assets/')) return;
-    jobs.push(fetch(o[key]).then(r => r.blob()).then(blobToData).then(d => { o[key] = d; }).catch(() => {}));
+    if (!/^(\/assets\/|cloud:)/.test(String(o[key]))) return;
+    jobs.push(fetch(srcOf(o[key])).then(r => r.blob()).then(blobToData).then(d => { o[key] = d; }).catch(() => {}));
   });
   await Promise.all(jobs);
   download(new Blob([JSON.stringify({ format: 'mizanscena-project', version: 1, project: copy })], { type: 'application/json' }), safeName(p.name) + '.mizproj');
@@ -222,7 +287,7 @@ export async function storeImage(file) {
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
   const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
-  const src = await storage.putAsset(`img-${Date.now().toString(36)}${uid()}.jpg`, blob);
+  const src = await storage.putAsset(`img-${Date.now().toString(36)}${uid()}.jpg`, blob, store.project && store.project.id);
   return { src, ratio: c.height / c.width };
 }
 

@@ -3,6 +3,7 @@
 import { store, $, $$, uid, esc, toast, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, shotAuto, SIZES, MOVES } from './store.js';
 import { planSVG, caption, atPhase } from './shapes.js';
 import { makeXlsx } from './xlsx.js';
+import { srcOf } from './storage.js';
 
 const HEAD = ['№', 'Примечания', 'Режим, хронометраж', 'Раскадровка', 'План', 'Содержание', 'Персонажи', 'Реквизит, грим, костюм', 'Операторская техника, звук'];
 const ICON = {
@@ -83,7 +84,7 @@ function render() {
       <td data-label="Режим, хронометраж"><input type="text" data-key="mode" value="${esc(s.mode)}" placeholder="День" aria-label="Режим">
         <input type="text" data-key="dur" value="${esc(s.dur)}" placeholder="0:10" aria-label="Хронометраж" inputmode="numeric"></td>
       <td data-label="Раскадровка" class="ds-pic">${s.frame
-        ? `<button class="ds-frame" data-act="frame" title="Заменить картинку"><img src="${esc(s.frame)}" alt="Раскадровка кадра ${nums.get(s.id)}"></button><button class="ds-link" data-act="unframe">Убрать</button>`
+        ? `<button class="ds-frame" data-act="frame" title="Заменить картинку"><img src="${esc(srcOf(s.frame))}" alt="Раскадровка кадра ${nums.get(s.id)}"></button><button class="ds-link" data-act="unframe">Убрать</button>`
         : `<button class="ds-frame empty" data-act="frame">Добавить картинку</button>`}</td>
       <td data-label="План" class="ds-pic">
         ${a.plan ? `<a class="ds-plan" href="#/p/${p.id}/plan/${a.plan.id}${s.cameraId ? '/' + s.cameraId : ''}" title="Открыть план">${planSVG(atPhase(a.plan, s.phaseId), { cameraId: s.cameraId || null })}</a>` : ''}
@@ -197,7 +198,7 @@ export function printDirector(p) {
   const body = groups(p).filter(g => g.shots.length).map(g => `<tr class="pr-scene"><th colspan="9">${esc(g.title)}</th></tr>` + g.shots.map(s => {
     const c = cells(p, s, nums), a = shotAuto(p, s);
     const td = v => `<td>${esc(v).replace(/\n/g, '<br>')}</td>`;
-    return `<tr>${td(c[0])}${td(c[1])}${td(c[2])}<td class="pr-pic">${s.frame ? `<img src="${esc(s.frame)}">` : ''}</td>
+    return `<tr>${td(c[0])}${td(c[1])}${td(c[2])}<td class="pr-pic">${s.frame ? `<img src="${esc(srcOf(s.frame))}">` : ''}</td>
       <td class="pr-pic">${a.plan ? planSVG(atPhase(a.plan, s.phaseId), { cameraId: s.cameraId || null }) : ''}</td>${td(c[3])}${td(c[4])}${td(c[5])}${td(c[6])}</tr>`;
   }).join('')).join('');
   printHTML(`<div class="pr-head"><p>Режиссёрский сценарий</p><h1>${esc(p.name)}</h1><p>${date}</p></div>

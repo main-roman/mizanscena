@@ -6,4 +6,6 @@ contextBridge.exposeInMainWorld('mizDesktop', {
   savePDF: name => ipcRenderer.invoke('save-pdf', name),
   // Открывает папку с проектами в проводнике или Finder.
   openData: () => ipcRenderer.invoke('open-data'),
+  // Вход через Яндекс ID в отдельном окошке. Возвращает токен Яндекса или null, если окно закрыли.
+  yandexLogin: clientId => ipcRenderer.invoke('yandex-login', clientId),
 });

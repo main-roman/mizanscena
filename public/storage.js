@@ -1,5 +1,7 @@
 // Хранилище проектов: папка projects/ через локальный сервер,
 // а если сервера нет (приложение открыто как статическая страница), то память браузера.
+// Облачные проекты (id вида c-xxxx) живут на сервере в Yandex Cloud, см. cloud.js.
+import { cloud, isCloud } from './cloud.js';
 const LS_INDEX = 'miz:projects';
 const lsKey = id => 'miz:project:' + id;
 
@@ -24,13 +26,16 @@ export const storage = {
   },
 
   async get(id) {
+    if (isCloud(id)) return cloud.get(id);
     if (this.mode === 'server') return api('/api/projects/' + id);
     const raw = localStorage.getItem(lsKey(id));
     if (!raw) throw new Error('not found');
     return JSON.parse(raw);
   },
 
+  // для облака возвращает объединённый проект, если пока шло сохранение кто-то тоже правил
   async put(p) {
+    if (isCloud(p.id)) return cloud.put(p);
     if (this.mode === 'server') {
       return api('/api/projects/' + p.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
     }
@@ -41,13 +46,15 @@ export const storage = {
   },
 
   async remove(id) {
+    if (isCloud(id)) return cloud.remove(id);
     if (this.mode === 'server') return api('/api/projects/' + id, { method: 'DELETE' });
     localStorage.removeItem(lsKey(id));
     localStorage.setItem(LS_INDEX, JSON.stringify(lsIndex().filter(s => s.id !== id)));
   },
 
   // Возвращает адрес картинки, который можно положить в проект.
-  async putAsset(name, blob) {
+  async putAsset(name, blob, pid) {
+    if (isCloud(pid)) return cloud.upload(pid, blob);
     if (this.mode === 'server') {
       const r = await api('/api/assets/' + name, { method: 'PUT', body: blob });
       return r.src;
@@ -71,3 +78,6 @@ export function blobToData(blob) {
     fr.readAsDataURL(blob);
   });
 }
+
+// Адрес картинки из проекта для показа: облачные картинки отдаются только участникам, по пропуску.
+export const srcOf = s => cloud.src(s || '');
