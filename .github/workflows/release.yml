@@ -1,15 +1,28 @@
 # Сборка установщиков для Windows и Mac и выпуск новой версии.
-# Запускается, когда в репозиторий отправлен тег вида v1.0.1. Готовые файлы попадают в раздел Releases,
-# а установленные программы находят там обновление и предлагают его поставить.
+# Запускается, когда в репозиторий отправлен тег вида v1.0.1. Сначала создаётся один выпуск на GitHub,
+# потом обе сборки кладут в него свои файлы (раньше Windows и Mac создавали по выпуску одновременно).
+# Установленные программы находят новый выпуск и предлагают обновиться.
 name: Сборка и выпуск
 
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Создать выпуск
+        run: gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1 || gh release create "$TAG" --repo "$REPO" --title "${TAG#v}" --notes "Мизансцена ${TAG#v}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+
   build:
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -18,8 +31,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
