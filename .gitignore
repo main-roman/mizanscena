@@ -7,3 +7,7 @@ incoming/
 .backup-*/
 *.lnk
 *.bat
+
+# облачный сервер: зависимости ставит само облако
+cloud/function/node_modules/
+cloud/function.zip

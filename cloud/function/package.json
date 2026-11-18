@@ -1,0 +1,13 @@
+{
+  "name": "mizanscena-api",
+  "version": "1.0.0",
+  "description": "Сервер Мизансцены в Yandex Cloud Functions",
+  "main": "index.js",
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ydb-sdk": "^5.11.1"
+  },
+  "private": true
+}
