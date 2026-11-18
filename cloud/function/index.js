@@ -182,9 +182,9 @@ const ops = {
     const uid = who(ev);
     await need(uid, qs.id, false);
     const rows = await q(`DECLARE $p AS Utf8;
-      SELECT u.id AS id, u.name AS name, u.email AS email, u.avatar AS avatar, m.role AS role
-      FROM members VIEW by_project AS m INNER JOIN users AS u ON u.id = m.user_id WHERE m.project_id = $p;`, { $p: U(qs.id) });
-    return { members: rows };
+      SELECT m.user_id AS id, u.name AS name, u.email AS email, u.avatar AS avatar, m.role AS role
+      FROM members VIEW by_project AS m LEFT JOIN users AS u ON u.id = m.user_id WHERE m.project_id = $p;`, { $p: U(qs.id) });
+    return { members: rows.map(r => ({ ...r, id: r.id || r.userId, name: r.name || 'Участник', email: r.email || '', avatar: r.avatar || '' })) };
   },
 
   async invite(ev, body) {
