@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# проекты пользователя живут в «Документы/Мизансцена» и в репозиторий не попадают
+projects/
+scenes/
+incoming/
+.backup-*/
+*.lnk
+*.bat

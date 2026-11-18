@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#1C2A30">
+  <title>Мизансцена</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.js", "three/examples/jsm/": "./vendor/jsm/" } }</script>
+</head>
+<body data-view="home">
+  <header class="bar">
+    <a class="brand" href="#/" title="К списку проектов" aria-label="К списку проектов">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v16H3z" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="9" cy="13" r="2.6" fill="#E9A21B"/><path d="M14 9l5-2v6z" fill="#6FA4FF"/></svg>
+      <span>Мизансцена</span>
+    </a>
+    <a class="ico" id="back" href="#/" title="Назад" aria-label="Назад" hidden><svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg></a>
+    <span class="crumb" id="crumb">Проекты</span>
+    <span class="plan-only plan-pick">
+      <label class="scene-pick"><span class="sr">План</span><select id="scene-select"></select></label>
+      <button class="btn" id="new-scene" title="Новый план">Новый план</button>
+    </span>
+    <span class="grow"></span>
+    <span class="status" id="status" role="status"></span>
+    <button class="ico plan-only" id="undo" title="Отменить (Ctrl+Z)" aria-label="Отменить"><svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M4 12h10a6 6 0 0 1 0 12" transform="translate(0 -3)"/></svg></button>
+    <button class="ico plan-only" id="redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть"><svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5M20 12H10a6 6 0 0 0 0 12" transform="translate(0 -3)"/></svg></button>
+  </header>
+
+  <div class="views">
+    <section class="view on" id="view-home"></section>
+    <section class="view" id="view-project"></section>
+    <section class="view" id="view-script"></section>
+    <section class="view" id="view-director"></section>
+
+    <section class="view" id="view-plan">
+      <main class="work">
+        <nav class="palette" id="palette" aria-label="Инструменты и объекты"></nav>
+
+        <section class="stage" id="stage">
+          <svg id="plan" xmlns="http://www.w3.org/2000/svg" aria-label="План сцены">
+            <defs id="defs"></defs>
+            <rect id="sheet-bg" width="100%" height="100%" fill="url(#grid)"/>
+            <g id="world"></g>
+            <g id="handles"></g>
+            <polyline id="ink" fill="none" points=""/>
+          </svg>
+          <div class="stage3d" id="stage3d"><div class="cam-bar" id="cam-bar"></div></div>
+          <div class="stage-top">
+            <div class="mode" id="mode" role="tablist" aria-label="Вид">
+              <button role="tab" data-mode="2d" aria-selected="true">План</button>
+              <button role="tab" data-mode="3d" aria-selected="false">3D</button>
+            </div>
+            <button class="chipbtn" id="layers-btn">Слои</button>
+            <button class="chipbtn" id="phases-btn">Фазы</button>
+          </div>
+          <div class="brushbar" id="brushbar" aria-label="Кисть"></div>
+          <div class="hint" id="hint"></div>
+          <div class="scale" id="scale"><i></i><span>1 м</span></div>
+          <div class="zoom">
+            <button class="ico" id="zoom-in" aria-label="Приблизить" title="Приблизить"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button class="ico" id="zoom-out" aria-label="Отдалить" title="Отдалить"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+            <button class="ico" id="zoom-fit" aria-label="Показать весь план" title="Показать весь план"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          </div>
+        </section>
+
+        <aside class="panel" id="panel">
+          <div class="tabs" role="tablist">
+            <button role="tab" data-tab="object" aria-selected="true">Объект</button>
+            <button role="tab" data-tab="shots">Кадры</button>
+            <button role="tab" data-tab="scene">План</button>
+          </div>
+          <div class="panes">
+            <div class="pane on" id="pane-object"></div>
+            <div class="pane" id="pane-shots"></div>
+            <div class="pane" id="pane-scene"></div>
+          </div>
+        </aside>
+      </main>
+    </section>
+  </div>
+
+  <div id="ctx" class="pop" role="dialog" aria-label="Настройки"></div>
+  <div id="toast" role="status"></div>
+  <div id="print"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

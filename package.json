@@ -1,0 +1,98 @@
+{
+  "name": "mizanscena",
+  "version": "1.0.0",
+  "description": "Мизансцена: сценарий, режиссёрский сценарий и Shot Designer в одной программе.",
+  "main": "desktop.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
+  },
+  "keywords": [],
+  "author": "Роман Зиновьев",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0"
+  },
+  "private": true,
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "productName": "Мизансцена",
+  "homepage": "https://github.com/main-roman/mizanscena",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/main-roman/mizanscena.git"
+  },
+  "license": "UNLICENSED",
+  "build": {
+    "appId": "ru.mizanscena.app",
+    "productName": "Мизансцена",
+    "artifactName": "Mizanscena-${version}-${os}-${arch}.${ext}",
+    "copyright": "Роман Зиновьев",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop.js",
+      "preload.js",
+      "server.js",
+      "package.json",
+      "public/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Мизансцена",
+      "artifactName": "Mizanscena-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.video",
+      "icon": "build/icon.png",
+      "identity": null
+    },
+    "dmg": {
+      "artifactName": "Mizanscena-${version}-mac.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "main-roman",
+        "repo": "mizanscena",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+Poly Haven (https://polyhaven.com), лицензия CC0
+
+table: dining_table
+round: round_wooden_table_01
+chair: painted_wooden_chair_01
+armchair: ArmChair_01
+sofa: sofa_02
+bed: vintage_day_bed
+cabinet: modern_wooden_cabinet
+shelf: wooden_bookshelf_worn
+stove: electric_stove
+mirror: ornate_mirror_01
+bush: wild_rooibos_bush
+rock: boulder_01
+fire: stone_fire_pit
+bench: painted_wooden_bench
+lamp: street_lamp_01
+genny: portable_generator
+desk: desk_lamp_arm_01
+plant: potted_plant_01
+текстура floor: wood_floor
+текстура wall: painted_plaster_wall
+текстура ground: forest_ground_04
+текстура asphalt: asphalt_02
+небо: kloofendal_38d_partly_cloudy

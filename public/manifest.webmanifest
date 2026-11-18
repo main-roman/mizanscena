@@ -1,0 +1,11 @@
+{
+  "name": "Мизансцена",
+  "short_name": "Мизансцена",
+  "description": "План сцены для режиссёра: персонажи, камеры, свет, кадры",
+  "lang": "ru",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#E8ECEA",
+  "theme_color": "#1C2A30",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

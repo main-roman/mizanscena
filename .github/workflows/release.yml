@@ -1,0 +1,31 @@
+# Сборка установщиков для Windows и Mac и выпуск новой версии.
+# Запускается, когда в репозиторий отправлен тег вида v1.0.1. Готовые файлы попадают в раздел Releases,
+# а установленные программы находят там обновление и предлагают его поставить.
+name: Сборка и выпуск
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Сборка и публикация
+        run: npx electron-builder ${{ matrix.os == 'windows-latest' && '--win' || '--mac' }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
