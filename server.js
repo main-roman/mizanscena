@@ -99,7 +99,7 @@ const server = http.createServer(async (req, res) => {
       for (const list of Object.values(os.networkInterfaces())) {
         for (const n of list || []) if (n.family === 'IPv4' && !n.internal) urls.push(`http://${n.address}:${PORT}`);
       }
-      return json(res, 200, { urls, data: PROJECTS, version: process.env.MIZ_VERSION || '' });
+      return json(res, 200, { urls, data: PROJECTS, version: process.env.MIZ_VERSION || '', test: !!process.env.MIZ_TEST });
     }
 
     if (p === '/api/projects' && req.method === 'GET') {

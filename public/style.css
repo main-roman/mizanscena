@@ -546,3 +546,8 @@ a.sect:hover { border-color: var(--ink); background: #fff; transform: translateX
 .hint { top: 106px; }
 
 .linkbtn { padding: 0; border: 0; background: none; color: #E6ECEA; text-decoration: underline; font: inherit; cursor: pointer; }
+
+/* тестовая версия: оранжевая полоса сверху и метка, чтобы не перепутать с установленной программой */
+.test-badge { display: none; padding: 2px 8px; border-radius: 6px; background: #E9A21B; color: #2A1D00; font-size: 12px; font-weight: 700; }
+body.is-test .test-badge { display: inline-block; }
+body.is-test .bar { box-shadow: inset 0 3px 0 #E9A21B; }

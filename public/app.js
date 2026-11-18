@@ -29,7 +29,7 @@ function show(name, title, back) {
   const b = $('#back');
   b.hidden = !back;
   if (back) b.href = back;
-  document.title = title === 'Проекты' ? 'Мизансцена' : `Мизансцена: ${title}`;
+  document.title = (title === 'Проекты' ? 'Мизансцена' : `Мизансцена: ${title}`) + (document.body.classList.contains('is-test') ? ' — тест' : '');
 }
 
 const plural = (n, one, few, many) => {
@@ -191,7 +191,7 @@ addEventListener('beforeunload', () => { unmountScript(); if (store.timer) store
 (async function start() {
   await storage.init();
   if (storage.mode === 'server') {
-    try { const info = await (await fetch('/api/info')).json(); lanUrls = info.urls || []; dataDir = info.data || ''; appVersion = info.version || ''; } catch { /* адрес просто не покажем */ }
+    try { const info = await (await fetch('/api/info')).json(); lanUrls = info.urls || []; dataDir = info.data || ''; appVersion = info.version || ''; if (info.test) { document.body.classList.add('is-test'); document.title = document.title.replace(/^Мизансцена/, 'Мизансцена — тест'); } } catch { /* адрес просто не покажем */ }
   }
   store.watch();
   await route();

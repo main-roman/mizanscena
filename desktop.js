@@ -8,6 +8,16 @@ const fs = require('fs');
 // папка проектов: отдельно от программы, поэтому установка и обновления её не трогают
 process.env.MIZ_DATA = process.env.MIZ_DATA || path.join(app.getPath('documents'), 'Мизансцена');
 process.env.MIZ_VERSION = app.getVersion();
+
+// Тестовая версия: запуск из папки с исходниками, а не установленная программа.
+// У неё свой порт и своё окно, поэтому её можно держать открытой рядом с установленной.
+// Проекты общие: та же папка «Документы/Мизансцена».
+const TEST = !app.isPackaged;
+if (TEST) {
+  process.env.MIZ_TEST = '1';
+  if (!process.env.PORT) process.env.PORT = '5190';
+  app.setPath('userData', app.getPath('userData') + '-test'); // иначе установленная программа не дала бы открыть второе окно
+}
 ipcMain.handle('open-data', () => shell.openPath(path.join(process.env.MIZ_DATA, 'projects')));
 
 // ---------- обновления ----------
@@ -88,7 +98,7 @@ async function open() {
   await waitForServer();
   win = new BrowserWindow({
     width: 1500, height: 950, minWidth: 900, minHeight: 600,
-    backgroundColor: '#141F24', title: 'Мизансцена', autoHideMenuBar: true,
+    backgroundColor: '#141F24', title: TEST ? 'Мизансцена — тест' : 'Мизансцена', autoHideMenuBar: true,
     icon: path.join(__dirname, 'public', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: true, preload: path.join(__dirname, 'preload.js') },
   });
