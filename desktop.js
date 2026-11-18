@@ -8,6 +8,9 @@ const fs = require('fs');
 // папка проектов: отдельно от программы, поэтому установка и обновления её не трогают
 process.env.MIZ_DATA = process.env.MIZ_DATA || path.join(app.getPath('documents'), 'Мизансцена');
 process.env.MIZ_VERSION = app.getVersion();
+// для подключения ИИ-помощников (Claude Desktop и другие) через мост mcp-stdio.js: программа запускает его сама собой в режиме Node
+process.env.MIZ_EXE = process.execPath;
+process.env.MIZ_BRIDGE = path.join(__dirname, 'mcp-stdio.js');
 
 // Тестовая версия: запуск из папки с исходниками, а не установленная программа.
 // У неё свой порт и своё окно, поэтому её можно держать открытой рядом с установленной.

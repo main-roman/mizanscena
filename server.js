@@ -81,10 +81,23 @@ fs.watch(PROJECTS, (_ev, name) => {
   }, 150));
 });
 
+// MCP: ИИ-помощники подключаются к программе по адресу /mcp (см. mcp.js)
+const mcp = require('./mcp.js');
+mcp.init({ PROJECTS, DATA, writeAtomic, version: process.env.MIZ_VERSION || require('./package.json').version });
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
     const p = decodeURIComponent(url.pathname);
+
+    if (p === '/mcp') return mcp.http(req, res, readBody);
+
+    // программа сообщает пропуск в облако, чтобы ИИ-помощник видел и облачные проекты (только с этого компьютера)
+    if (p === '/api/cloud-session' && req.method === 'POST') {
+      if (!mcp.LOOPBACK(req.socket.remoteAddress)) return json(res, 403, { error: 'forbidden' });
+      mcp.setSession(JSON.parse((await readBody(req, 64 * 1024)).toString('utf8') || 'null'));
+      return json(res, 200, { ok: true });
+    }
 
     if (p === '/api/events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
@@ -99,7 +112,10 @@ const server = http.createServer(async (req, res) => {
       for (const list of Object.values(os.networkInterfaces())) {
         for (const n of list || []) if (n.family === 'IPv4' && !n.internal) urls.push(`http://${n.address}:${PORT}`);
       }
-      return json(res, 200, { urls, data: PROJECTS, version: process.env.MIZ_VERSION || '', test: !!process.env.MIZ_TEST });
+      return json(res, 200, {
+        urls, data: PROJECTS, version: process.env.MIZ_VERSION || '', test: !!process.env.MIZ_TEST,
+        mcp: { url: `http://localhost:${PORT}/mcp`, port: PORT, exe: process.env.MIZ_EXE || '', bridge: process.env.MIZ_BRIDGE || path.join(__dirname, 'mcp-stdio.js'), node: !process.env.MIZ_EXE },
+      });
     }
 
     if (p === '/api/projects' && req.method === 'GET') {

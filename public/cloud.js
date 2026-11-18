@@ -35,6 +35,7 @@ export const cloud = {
   onAuth: () => {},
   get user() { return auth && auth.user; },
   get signedIn() { return !!auth; },
+  get session() { return auth && auth.session; },
 
   // В программе вход идёт в отдельном окошке; в браузере человек вставляет код со страницы Яндекса.
   async login() {

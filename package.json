@@ -40,6 +40,8 @@
       "desktop.js",
       "preload.js",
       "server.js",
+      "mcp.js",
+      "mcp-stdio.js",
       "package.json",
       "public/**/*"
     ],

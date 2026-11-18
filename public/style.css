@@ -582,3 +582,12 @@ dialog.ask textarea:focus { outline: 2px solid var(--light, #E9A21B); outline-of
 @keyframes ask-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
 @keyframes ask-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { dialog.ask, dialog.ask.out, dialog.ask::backdrop { animation: none; } }
+
+/* подключение ИИ */
+dialog.ask.ai { width: min(680px, calc(100vw - 32px)); }
+.ai-block { margin-top: 16px; }
+.ai-block h4 { margin: 0 0 4px; font-size: 14px; font-weight: 650; }
+.ai-block .ask-text { margin-bottom: 8px; }
+.ai-code { display: flex; gap: 8px; align-items: flex-start; }
+.ai-code pre { flex: 1; min-width: 0; margin: 0; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font: 12px/1.45 Consolas, 'Cascadia Mono', Menlo, monospace; white-space: pre-wrap; word-break: break-all; user-select: all; max-height: 220px; overflow: auto; }
+.ai-code .act { flex: none; }

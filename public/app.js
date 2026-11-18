@@ -10,7 +10,7 @@ import { mountDirector, unmountDirector, printDirector, csvDirector, totalSecond
 import { download, safeName } from './store.js';
 
 const VIEWS = ['home', 'project', 'script', 'director', 'plan'];
-let current = '', lanUrls = [], dataDir = '', appVersion = '';
+let current = '', lanUrls = [], dataDir = '', appVersion = '', mcpInfo = null;
 
 store.onStatus = (text, bad = false) => {
   const el = $('#status');
@@ -21,7 +21,14 @@ store.onRemote = (p, why) => {
   route(true);
   toast(why === 'cloud' ? 'Пришли правки соавтора' : why === 'merge' ? 'Ваши правки объединены с правками соавтора' : 'Проект обновлён из файла');
 };
-cloud.onAuth = () => { if (current === 'home') renderHome(); };
+cloud.onAuth = () => { syncSession(); if (current === 'home') renderHome(); };
+
+// Пропуск в облако передаётся серверу программы, чтобы подключённый ИИ-помощник видел и облачные проекты.
+function syncSession() {
+  if (storage.mode !== 'server') return;
+  fetch('/api/cloud-session', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cloud.signedIn ? { session: cloud.session, user: cloud.user } : null) }).catch(() => {});
+}
 store.onList = () => { if (current === 'home') renderHome(); };
 
 function show(name, title, back) {
@@ -92,7 +99,7 @@ async function renderHome() {
     </a>`).join('');
   el.innerHTML = `<div class="home">
     <header class="home-head"><h1>Проекты</h1>
-      <div class="home-actions"><button class="act main" id="h-new">Новый проект</button><button class="act" id="h-open">Открыть из файла</button></div></header>
+      <div class="home-actions"><button class="act main" id="h-new">Новый проект</button><button class="act" id="h-open">Открыть из файла</button>${mcpInfo ? '<button class="act" id="h-ai">Подключить ИИ</button>' : ''}</div></header>
     ${list.length ? `<div class="home-grid">${tiles}</div>` : `<p class="home-empty">Здесь будут ваши проекты. Создайте новый или откройте файл проекта .mizproj с компьютера или телефона.</p>`}
     <p class="home-where">${storage.mode === 'server'
       ? `Проекты лежат на этом компьютере в папке <b>${esc(dataDir || 'projects')}</b>${window.mizDesktop && window.mizDesktop.openData ? ' <button class="linkbtn" id="h-folder">Открыть папку</button>' : ''}.${appVersion ? ` Версия программы ${esc(appVersion)}.` : ''}${lanUrls.length ? ` На телефоне в той же сети Wi-Fi откройте ${lanUrls.map(u => `<b>${u}</b>`).join(' или ')}: там те же проекты, правки видны сразу на обоих устройствах.` : ''}`
@@ -139,8 +146,9 @@ async function cloudLogin() {
 
 $('#view-home').addEventListener('click', async e => {
   if (e.target.closest('#h-folder')) { window.mizDesktop.openData(); return; }
+  if (e.target.closest('#h-ai')) { showAI(); return; }
   if (e.target.closest('#c-login')) { if (await cloudLogin()) toast('Вы вошли: ' + cloud.user.name); return; }
-  if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); renderHome(); } return; }
+  if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); syncSession(); renderHome(); } return; }
   if (e.target.closest('#c-new')) { try { location.hash = `#/p/${await createProject(null, true)}`; } catch (err) { toast(err.message); } return; }
   if (e.target.closest('#c-join')) {
     const code = (await ask('Приглашение в проект', { text: 'Вставьте сообщение с приглашением целиком или только код из него.', placeholder: 'Код приглашения', ok: 'Войти в проект' }) || '').match(/[\w-]{10,}/g);
@@ -156,6 +164,38 @@ $('#view-home').addEventListener('click', async e => {
     catch { toast('Это не файл проекта'); }
   }
 });
+
+// ---------- подключение ИИ-помощника (MCP) ----------
+
+function showAI() {
+  const m = mcpInfo, name = 'mizanscena' + (document.body.classList.contains('is-test') ? '-test' : '');
+  const desktop = { mcpServers: { [name]: m.node
+    ? { command: 'node', args: [m.bridge, '--port', String(m.port)] }
+    : { command: m.exe, args: [m.bridge, '--port', String(m.port)], env: { ELECTRON_RUN_AS_NODE: '1' } } } };
+  const mac = /Mac/.test(navigator.platform);
+  const blocks = [
+    ['Claude Code', 'Выполните в терминале:', `claude mcp add --transport http ${name} ${m.url}`],
+    ['Claude Desktop', `Вставьте в файл настроек ${mac ? '~/Library/Application Support/Claude/claude_desktop_config.json' : '%APPDATA%\\Claude\\claude_desktop_config.json'} (Настройки → Разработчик → Изменить конфигурацию) и перезапустите Claude. Если в файле уже есть mcpServers, добавьте строку ${name} внутрь.`, JSON.stringify(desktop, null, 2)],
+    ['Cursor, VS Code, Windsurf и другие', 'Адрес MCP-сервера (Streamable HTTP):', JSON.stringify({ mcpServers: { [name]: { url: m.url } } }, null, 2)],
+  ];
+  const d = document.createElement('dialog');
+  d.className = 'ask ai';
+  d.innerHTML = `<form method="dialog"><h3>Подключить ИИ-помощника</h3>
+    <p class="ask-text">Помощник сможет читать и править ваши проекты: сценарий, режиссёрский сценарий и планы Shot Designer. Правки сразу видны здесь.
+    Подходит любая программа с поддержкой MCP. Мизансцена должна быть открыта, а облачные проекты видны, если вы вошли в облако.</p>
+    ${blocks.map(([t, hint, code], i) => `<section class="ai-block"><h4>${esc(t)}</h4><p class="ask-text">${esc(hint)}</p>
+      <div class="ai-code"><pre>${esc(code)}</pre><button type="button" class="act" data-copy="${i}">Скопировать</button></div></section>`).join('')}
+    <p class="ask-text">Помощник работает только с этого компьютера; телефоны и другие устройства в Wi-Fi к нему не подключатся.</p>
+    <div class="ask-row"><button class="act main" value="ok">Готово</button></div></form>`;
+  d.addEventListener('click', async e => {
+    const b = e.target.closest('[data-copy]');
+    if (!b) return;
+    try { await navigator.clipboard.writeText(blocks[b.dataset.copy][2]); b.textContent = 'Скопировано'; } catch { b.textContent = 'Не получилось'; }
+  });
+  d.addEventListener('close', () => { d.classList.add('out'); setTimeout(() => d.remove(), 200); });
+  document.body.append(d);
+  d.showModal();
+}
 
 // ---------- страница проекта ----------
 
@@ -287,8 +327,9 @@ addEventListener('beforeunload', () => { unmountScript(); if (store.timer) store
 (async function start() {
   await storage.init();
   if (storage.mode === 'server') {
-    try { const info = await (await fetch('/api/info')).json(); lanUrls = info.urls || []; dataDir = info.data || ''; appVersion = info.version || ''; if (info.test) { document.body.classList.add('is-test'); document.title = document.title.replace(/^Мизансцена/, 'Мизансцена — тест'); } } catch { /* адрес просто не покажем */ }
+    try { const info = await (await fetch('/api/info')).json(); mcpInfo = info.mcp && ['localhost', '127.0.0.1'].includes(location.hostname) ? info.mcp : null; lanUrls = info.urls || []; dataDir = info.data || ''; appVersion = info.version || ''; if (info.test) { document.body.classList.add('is-test'); document.title = document.title.replace(/^Мизансцена/, 'Мизансцена — тест'); } } catch { /* адрес просто не покажем */ }
   }
+  syncSession();
   store.watch();
   await route();
   document.body.classList.add('ready');
