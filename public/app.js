@@ -2,6 +2,7 @@
 import { storage } from './storage.js';
 import { store, $, $$, esc, toast, pickFile, createProject, copyToCloud, exportProjectFile, importProjectFile, scenesOf } from './store.js';
 import { cloud, isCloud } from './cloud.js';
+import { ask } from './ui.js';
 import { planSVG } from './shapes.js';
 import { mountPlan, unmountPlan, createPlan } from './plan.js';
 import { mountScript, unmountScript, scriptStats, printScript, toFountain, loadScriptInto, SCRIPT_FILES } from './script.js';
@@ -142,7 +143,7 @@ $('#view-home').addEventListener('click', async e => {
   if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); renderHome(); } return; }
   if (e.target.closest('#c-new')) { try { location.hash = `#/p/${await createProject(null, true)}`; } catch (err) { toast(err.message); } return; }
   if (e.target.closest('#c-join')) {
-    const code = (prompt('Вставьте приглашение (код или всё сообщение целиком)') || '').match(/[\w-]{10,}/g);
+    const code = (await ask('Приглашение в проект', { text: 'Вставьте сообщение с приглашением целиком или только код из него.', placeholder: 'Код приглашения', ok: 'Войти в проект' }) || '').match(/[\w-]{10,}/g);
     if (!code) return;
     try { location.hash = `#/p/${await cloud.join(code[code.length - 1])}`; toast('Вы в проекте'); } catch (err) { toast(err.message); }
     return;
@@ -215,8 +216,10 @@ async function invite(p, role) {
   try {
     const { code } = await cloud.invite(p.id, role);
     const text = `Приглашаю в проект «${p.name}» в Мизансцене (${role === 'viewer' ? 'просмотр' : 'можно править'}). Откройте программу, войдите через Яндекс ID, нажмите «У меня приглашение» и вставьте код: ${code}`;
-    await navigator.clipboard.writeText(text).catch(() => {});
-    prompt('Приглашение скопировано, отправьте его соавтору. Действует 14 дней.', text);
+    let copied = true;
+    await navigator.clipboard.writeText(text).catch(() => { copied = false; });
+    await ask(role === 'viewer' ? 'Приглашение: только смотреть' : 'Приглашение: может править', {
+      text: `${copied ? 'Текст уже скопирован. ' : ''}Отправьте его соавтору в любом мессенджере. Приглашение действует 14 дней.`, value: text, readonly: true, ok: 'Закрыть' });
   } catch (e) { toast(e.message); }
 }
 

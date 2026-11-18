@@ -48,3 +48,39 @@ document.addEventListener('pointerdown', e => {
   arrow.addEventListener('pointerup', up, { once: true });
   arrow.addEventListener('pointercancel', up, { once: true });
 });
+
+// Окно с текстом и полем: замена prompt(), которого в программе (Electron) нет.
+// readonly: показать готовый текст с кнопкой «Скопировать». Возвращает введённое или null, если закрыли.
+export function ask(title, { text = '', value = '', placeholder = '', readonly = false, ok = 'Готово' } = {}) {
+  return new Promise(resolve => {
+    const d = document.createElement('dialog');
+    d.className = 'ask';
+    d.innerHTML = `<form method="dialog">
+      <h3></h3>${text ? '<p class="ask-text"></p>' : ''}
+      <textarea rows="${readonly ? 4 : 2}" spellcheck="false"${readonly ? ' readonly' : ''}></textarea>
+      <div class="ask-row">${readonly ? '<button type="button" class="act" data-copy>Скопировать</button>' : '<button type="button" class="act" data-cancel>Отмена</button>'}<button class="act main" value="ok"></button></div>
+    </form>`;
+    d.querySelector('h3').textContent = title;
+    if (text) d.querySelector('.ask-text').textContent = text;
+    const area = d.querySelector('textarea');
+    area.value = value;
+    area.placeholder = placeholder;
+    d.querySelector('[value="ok"]').textContent = ok;
+    const copy = d.querySelector('[data-copy]');
+    if (copy) copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(area.value); } catch { area.select(); document.execCommand('copy'); }
+      copy.textContent = 'Скопировано';
+    };
+    const cancel = d.querySelector('[data-cancel]');
+    if (cancel) cancel.onclick = () => d.close('');
+    area.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !readonly) { e.preventDefault(); d.close('ok'); } });
+    d.addEventListener('close', () => {
+      resolve(d.returnValue === 'ok' ? area.value : null);
+      d.classList.add('out');
+      setTimeout(() => d.remove(), 200);
+    });
+    document.body.append(d);
+    d.showModal();
+    if (readonly) area.select(); else area.focus();
+  });
+}

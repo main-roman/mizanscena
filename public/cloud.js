@@ -42,7 +42,7 @@ export const cloud = {
     if (window.mizDesktop && window.mizDesktop.yandexLogin) token = await window.mizDesktop.yandexLogin(CLIENT_ID);
     else {
       open(`https://oauth.yandex.ru/authorize?response_type=token&client_id=${CLIENT_ID}`, '_blank');
-      token = prompt('Войдите в открывшейся вкладке Яндекса и вставьте сюда показанный код');
+      token = await (await import('./ui.js')).ask('Вход через Яндекс ID', { text: 'Войдите в открывшейся вкладке Яндекса и вставьте сюда показанный там код.', ok: 'Войти' });
     }
     if (!token) return false;
     const r = await call('login', { body: { yandexToken: token.trim() } });

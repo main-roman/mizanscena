@@ -568,3 +568,17 @@ body.is-test .bar { box-shadow: inset 0 3px 0 #E9A21B; }
 .member { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .member img, .member-pic { width: 24px; height: 24px; border-radius: 50%; background: #2A3A40; flex: none; }
 .member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* окно с полем (приглашение, код) */
+dialog.ask { margin: auto; inset: 0; position: fixed; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--line); border-radius: 14px; padding: 22px; width: min(520px, calc(100vw - 32px)); background: var(--chrome); color: var(--ink); box-shadow: 0 24px 60px rgba(8,14,16,.35); animation: ask-in .2s cubic-bezier(.2,.7,.3,1); }
+dialog.ask.out { animation: ask-out .18s ease-in forwards; }
+dialog.ask::backdrop { background: rgba(8,14,16,.55); animation: ask-fade .2s ease-out; }
+dialog.ask h3 { margin: 0 0 8px; font-size: 17px; font-weight: 650; }
+.ask-text { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+dialog.ask textarea { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; font-size: 14px; line-height: 1.45; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: inherit; }
+dialog.ask textarea:focus { outline: 2px solid var(--light, #E9A21B); outline-offset: 1px; }
+.ask-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+@keyframes ask-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+@keyframes ask-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { dialog.ask, dialog.ask.out, dialog.ask::backdrop { animation: none; } }
