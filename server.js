@@ -59,6 +59,22 @@ function writeAtomic(file, data) {
   fs.renameSync(tmp, file);
 }
 
+// Страховка: прежняя версия проекта раз в час уходит в projects/.history/<id>/, хранятся последние 48.
+const HISTORY = path.join(PROJECTS, '.history');
+function keepHistory(id, file) {
+  try {
+    if (!fs.existsSync(file)) return;
+    const dir = path.join(HISTORY, id);
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 13).replace('T', '_');
+    const dest = path.join(dir, stamp + '.json');
+    if (fs.existsSync(dest)) return;
+    fs.copyFileSync(file, dest);
+    const old = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+    for (const f of old.slice(0, Math.max(0, old.length - 48))) fs.unlinkSync(path.join(dir, f));
+  } catch { /* история не должна мешать сохранению */ }
+}
+
 function serveFile(res, root, rel) {
   const file = path.resolve(root, '.' + path.sep + rel);
   if (!file.startsWith(root + path.sep)) return send(res, 403, 'forbidden', 'text/plain');
@@ -83,7 +99,7 @@ fs.watch(PROJECTS, (_ev, name) => {
 
 // MCP: ИИ-помощники подключаются к программе по адресу /mcp (см. mcp.js)
 const mcp = require('./mcp.js');
-mcp.init({ PROJECTS, DATA, writeAtomic, version: process.env.MIZ_VERSION || require('./package.json').version });
+mcp.init({ PROJECTS, DATA, writeAtomic: (file, data) => { if (path.dirname(file) === PROJECTS) keepHistory(path.basename(file, '.json'), file); writeAtomic(file, data); }, version: process.env.MIZ_VERSION || require('./package.json').version });
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -148,6 +164,8 @@ const server = http.createServer(async (req, res) => {
         const body = await readBody(req, 40 * 1024 * 1024);
         const project = JSON.parse(body.toString('utf8'));
         project.id = id;
+        if (!project || typeof project !== 'object' || !project.script || !Array.isArray(project.plans)) return json(res, 400, { error: 'not a project' });
+        keepHistory(id, file);
         writeAtomic(file, JSON.stringify(project, null, 2));
         return json(res, 200, { ok: true });
       }

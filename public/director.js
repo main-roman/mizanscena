@@ -3,6 +3,7 @@
 import { store, $, $$, uid, esc, toast, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, shotAuto, SIZES, MOVES } from './store.js';
 import { planSVG, caption, atPhase } from './shapes.js';
 import { makeXlsx } from './xlsx.js';
+import { CATS, sceneInfo, sceneItems, summaryLine, syncShotProps, catOf, cycleCat, splitItems } from './breakdown.js';
 import { srcOf } from './storage.js';
 
 const HEAD = ['№', 'Примечания', 'Режим, хронометраж', 'Раскадровка', 'План', 'Содержание', 'Персонажи', 'Реквизит, грим, костюм', 'Операторская техника, звук'];
@@ -65,8 +66,23 @@ function summary() {
   $('#ds-sum', root).textContent = `Кадров: ${p.shots.length}` + (sec ? `. Хронометраж ${clock(sec)}` : '');
 }
 
+// подсказки из разбора сцены: то, чего ещё нет в тексте ячейки; щелчок дописывает в ячейку
+const has = (text, t) => String(text || '').toLowerCase().includes(t.toLowerCase());
+const sugs = (key, list, cur) => {
+  const left = list.filter(t => !has(cur, t));
+  return left.length ? `<div class="ds-sug">${left.map(t => `<button data-sug="${key}" data-text="${esc(t)}" title="Дописать в ячейку">+ ${esc(t)}</button>`).join('')}</div>` : '';
+};
+
+// пункты, вписанные в ячейку реквизита, с графой из разбора; щелчок меняет графу
+const tags = (p, s) => {
+  if (!s.sceneId) return '';
+  const list = splitItems(s.props).map(t => [t, catOf(p, s.sceneId, t)]).filter(([, c]) => c);
+  return list.length ? `<div class="ds-tags">${list.map(([t, c]) => `<button class="ds-tag cat-${c}" data-tag="${esc(t)}" title="${CATS[c]}. Щёлкните, чтобы сменить: реквизит, костюм, грим"><i>${CATS[c]}</i>${esc(t)}</button>`).join('')}</div>` : '';
+};
+
 function render() {
-  const p = project(), nums = numbering(p), scenes = scenesOf(p), gs = groups(p);
+  const p = project(), nums = numbering(p), scenes = scenesOf(p), gs = groups(p), info = sceneInfo(p);
+  const bd = new Map(scenes.map(s => [s.id, sceneItems(p, s.id, info)]));
   const area = (s, key, ph) => `<textarea class="auto" data-key="${key}" rows="1" placeholder="${esc(ph)}">${esc(s[key])}</textarea>`;
   const row = (s, i, g) => {
     const a = shotAuto(p, s);
@@ -92,8 +108,8 @@ function render() {
         ${a.plan ? `<select data-key="cameraId" aria-label="Камера"><option value="">Камера не выбрана</option>${cams.map(c => `<option value="${c.id}"${c.id === s.cameraId ? ' selected' : ''}>${esc(caption(c))}</option>`).join('')}</select>` : ''}
         ${a.plan && (a.plan.phases || []).length > 1 ? `<select data-key="phaseId" aria-label="Фаза"><option value="">Фаза как сейчас на плане</option>${a.plan.phases.map(ph => `<option value="${ph.id}"${ph.id === s.phaseId ? ' selected' : ''}>${esc(ph.name)}</option>`).join('')}</select>` : ''}</td>
       <td data-label="Содержание" class="ds-wide">${area(s, 'content', 'Что происходит в кадре')}</td>
-      <td data-label="Персонажи">${area(s, 'chars', a.chars.length ? a.chars.join(', ') : 'Кто в кадре')}</td>
-      <td data-label="Реквизит, грим, костюм">${area(s, 'props', 'Реквизит')}</td>
+      <td data-label="Персонажи">${area(s, 'chars', a.chars.length ? a.chars.join(', ') : 'Кто в кадре')}${bd.has(s.sceneId) ? sugs('chars', bd.get(s.sceneId).cast, s.chars) : ''}</td>
+      <td data-label="Реквизит, грим, костюм">${area(s, 'props', 'Реквизит')}${tags(p, s)}${bd.has(s.sceneId) ? sugs('props', [...bd.get(s.sceneId).props, ...bd.get(s.sceneId).costume, ...bd.get(s.sceneId).makeup], s.props) : ''}</td>
       <td data-label="Операторская техника, звук" class="ds-tech">
         <select data-key="size" aria-label="Крупность">${SIZES.map(v => `<option${v === s.size ? ' selected' : ''}>${v}</option>`).join('')}</select>
         <select data-key="move" aria-label="Движение камеры">${MOVES.map(v => `<option${v === s.move ? ' selected' : ''}>${v}</option>`).join('')}</select>
@@ -102,7 +118,9 @@ function render() {
     </tr>`;
   };
   const body = gs.map(g => `<tbody data-scene="${g.id}">
-      <tr class="ds-scene"><th colspan="9"><span>${esc(g.title)}</span><button class="act" data-act="add">Добавить кадр</button></th></tr>
+      <tr class="ds-scene"><th colspan="9"><span>${g.id ? `<button class="linkbtn ds-scene-open" data-scene-open="${g.id}" title="Открыть текст сцены рядом">${esc(g.title)}</button>` : esc(g.title)}</span>
+        ${g.id ? `<a class="act" href="#/p/${p.id}/scene/${g.id}" title="Страница сцены: разбор, локация, планы">Разбор сцены</a>` : ''}<button class="act" data-act="add">Добавить кадр</button>
+        ${g.id ? bdLine(bd.get(g.id), p, g.id) : ''}</th></tr>
       ${g.shots.map((s, i) => row(s, i, g)).join('')}
     </tbody>`).join('');
   const hint = scenes.length ? '' : `<p class="empty ds-hint">Сцены появятся здесь сами, когда в сценарии будут строки «Время и место». Кадры можно добавлять уже сейчас.</p>`;
@@ -111,6 +129,14 @@ function render() {
   scroll.scrollTop = top;
   $$('textarea.auto', root).forEach(grow);
   summary();
+}
+
+// разбор сцены под её заголовком: графы цветными метками, локации ссылками
+function bdLine(items, p, sid) {
+  const locs = p.locations.filter(l => l.sceneIds.includes(sid));
+  const parts = Object.entries(items).filter(([, v]) => v.length).map(([c, v]) => `<span class="ds-bd-cat cat-${c}"><b>${CATS[c]}</b> ${v.map(esc).join(', ')}</span>`);
+  if (locs.length) parts.unshift(`<span class="ds-bd-cat"><b>Локация</b> ${locs.map(l => `<button class="linkbtn" data-loc-open="${l.id}">${esc(l.name)}</button>`).join(', ')}</span>`);
+  return parts.length ? `<div class="ds-bd">${parts.join('')}</div>` : '';
 }
 
 function grow(t) {
@@ -131,6 +157,12 @@ function onInput(e) {
 
 function onChange(e) {
   const key = e.target.dataset.key, s = shotOf(e.target);
+  // вписанное в реквизит кадра попадает в разбор сцены и в реквизит её локации
+  if (s && key === 'props' && e.target.matches('textarea')) {
+    if (s.sceneId) { const n = syncShotProps(project(), s.sceneId, s.props, uid); if (n) toast(`В разбор сцены добавлено: ${n}`); }
+    store.touch(); render();
+    return;
+  }
   if (!s || !e.target.matches('select')) return;
   if (key === 'planId') {
     const plan = project().plans.find(x => x.id === s.planId);
@@ -145,6 +177,24 @@ async function onClick(e) {
   const b = e.target.closest('button');
   if (!b) return;
   const p = project(), act = b.dataset.act;
+  if (b.dataset.tag) {
+    const s = shotOf(b);
+    if (!s) return;
+    const c = cycleCat(p, s.sceneId, b.dataset.tag, uid);
+    store.touch(); render();
+    toast(`«${b.dataset.tag}»: ${CATS[c].toLowerCase()}`);
+    return;
+  }
+  if (b.dataset.sug) {
+    const s = shotOf(b), key = b.dataset.sug;
+    if (!s) return;
+    s[key] = [s[key].trim().replace(/[,;]\s*$/, ''), b.dataset.text].filter(Boolean).join(', ');
+    const t = $(`[data-key="${key}"]`, b.closest('td'));
+    t.value = s[key]; grow(t);
+    const box = b.parentElement; b.remove(); if (!box.children.length) box.remove();
+    store.touch();
+    return;
+  }
   if (act === 'print') return printDirector(p);
   if (act === 'csv') return csvDirector(p);
   if (act === 'add') {
@@ -195,7 +245,9 @@ export function printDirector(p) {
   if (!p.shots.length) return toast('В режиссёрском сценарии пока нет кадров');
   const nums = numbering(p);
   const date = new Date().toLocaleDateString('ru-RU');
-  const body = groups(p).filter(g => g.shots.length).map(g => `<tr class="pr-scene"><th colspan="9">${esc(g.title)}</th></tr>` + g.shots.map(s => {
+  const info = sceneInfo(p);
+  const line = id => { const t = id ? summaryLine(sceneItems(p, id, info)) : ''; return t ? `<tr class="pr-bd"><td colspan="9">${esc(t)}</td></tr>` : ''; };
+  const body = groups(p).filter(g => g.shots.length).map(g => `<tr class="pr-scene"><th colspan="9">${esc(g.title)}</th></tr>${line(g.id)}` + g.shots.map(s => {
     const c = cells(p, s, nums), a = shotAuto(p, s);
     const td = v => `<td>${esc(v).replace(/\n/g, '<br>')}</td>`;
     return `<tr>${td(c[0])}${td(c[1])}${td(c[2])}<td class="pr-pic">${s.frame ? `<img src="${esc(srcOf(s.frame))}">` : ''}</td>
@@ -217,6 +269,8 @@ export function csvDirector(p) {
   ];
   for (const g of gs) {
     rows.push({ cells: [g.title], style: 4, height: 22, merge: true });
+    const t = g.id ? summaryLine(sceneItems(p, g.id)) : '';
+    if (t) rows.push({ cells: [t], style: 2, height: Math.min(120, 15 * Math.ceil(t.length / 150) + 6), merge: true });
     for (const s of g.shots) {
       const c = cells(p, s, nums), a = shotAuto(p, s);
       const cam = a.plan ? [a.plan.name, a.camera ? `Камера ${a.camera.name}, ${a.camera.lens} мм` : ''].filter(Boolean).join('\n') : '';

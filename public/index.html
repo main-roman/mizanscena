@@ -34,6 +34,11 @@
     <section class="view" id="view-project"></section>
     <section class="view" id="view-script"></section>
     <section class="view" id="view-director"></section>
+    <section class="view" id="view-plans"></section>
+    <section class="view" id="view-scenes"></section>
+    <section class="view" id="view-scene"></section>
+    <section class="view" id="view-locations"></section>
+    <section class="view" id="view-location"></section>
 
     <section class="view" id="view-plan">
       <main class="work">
@@ -55,6 +60,8 @@
             </div>
             <button class="chipbtn" id="layers-btn">Слои</button>
             <button class="chipbtn" id="phases-btn">Фазы</button>
+            <button class="chipbtn loc-chip" id="loc-btn" title="Локация этого плана"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg><span>Локация</span></button>
+            <button class="chipbtn side-btn" id="side-btn" title="Свернуть панель" aria-label="Свернуть панель"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
           </div>
           <div class="brushbar" id="brushbar" aria-label="Кисть"></div>
           <div class="hint" id="hint"></div>
@@ -80,6 +87,7 @@
         </aside>
       </main>
     </section>
+    <aside class="split" id="split" aria-label="Сцена из сценария"></aside>
   </div>
 
   <div id="ctx" class="pop" role="dialog" aria-label="Настройки"></div>

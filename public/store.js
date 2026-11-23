@@ -2,6 +2,7 @@
 import { storage, blobToData, srcOf } from './storage.js';
 import { cloud, isCloud, merge } from './cloud.js';
 import { FURN, LIGHTS, esc } from './shapes.js';
+import { normalizeBreakdown } from './breakdown.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -17,6 +18,7 @@ export function normalizePlan(s) {
   s.name = s.name || 'Без названия';
   s.note = s.note || '';
   s.sceneId = s.sceneId || '';
+  s.locationId = s.locationId || '';
   s.objects = Array.isArray(s.objects) ? s.objects : [];
   for (const o of s.objects) {
     if (!o.id) o.id = uid();
@@ -49,8 +51,37 @@ export function normalizeProject(p) {
     s.size = s.size || SIZES[2];
     s.move = s.move || MOVES[0];
   }
+  p.locations = Array.isArray(p.locations) ? p.locations : [];
+  for (const l of p.locations) normalizeLocation(l);
+  normalizeBreakdown(p, uid);
   return p;
 }
+
+// Локация: фото, адрес или ссылка на карту, сцены сценария и постановочный реквизит (общий и по сценам).
+export function normalizeLocation(l) {
+  l.id = l.id || 'loc-' + uid();
+  l.name = l.name || 'Новая локация';
+  l.geo = l.geo || '';
+  l.note = l.note || '';
+  l.photos = Array.isArray(l.photos) ? l.photos.filter(x => x && x.src) : [];
+  for (const ph of l.photos) { ph.id = ph.id || uid(); ph.name = ph.name || ''; }
+  l.sceneIds = Array.isArray(l.sceneIds) ? l.sceneIds : [];
+  l.props = Array.isArray(l.props) ? l.props : [];
+  for (const x of l.props) { x.id = x.id || uid(); x.text = x.text || ''; x.sceneId = x.sceneId || ''; x.ready = !!x.ready; }
+  return l;
+}
+
+// Обложка облачного проекта для главного экрана: облако отдаёт только название, поэтому первый план
+// запоминаем на этом устройстве, когда проект открывали.
+export function rememberCover(p) {
+  if (!isCloud(p.id)) return;
+  try {
+    const pl = p.plans[0];
+    if (pl) localStorage.setItem('miz:cover:' + p.id, JSON.stringify({ ...pl, objects: pl.objects.filter(o => o.type !== 'image') }));
+    else localStorage.removeItem('miz:cover:' + p.id);
+  } catch { /* место в браузере кончилось — обойдёмся облаком */ }
+}
+export function coverOf(id) { try { return JSON.parse(localStorage.getItem('miz:cover:' + id) || 'null'); } catch { return null; } }
 
 export const scenesOf = p => p.script.blocks.filter(b => b.type === 'scene');
 
@@ -96,6 +127,7 @@ export const store = {
     this.project = p;
     this.last = JSON.stringify(p);
     try { localStorage.setItem('miz:last', id); } catch { /* не страшно */ }
+    rememberCover(p);
     if (before !== this.last) this.touch(); else this.onStatus('');
     return p;
   },
@@ -130,7 +162,8 @@ export const store = {
     this.last = s;
     try {
       const merged = await storage.put(p);
-      if (merged && this.project === p) {
+      // объединение бывает только у облачных проектов; всё, что не похоже на проект, игнорируем
+      if (isCloud(p.id) && merged && typeof merged === 'object' && merged.script && Array.isArray(merged.plans) && this.project === p) {
         // пока сохраняли, проект правил кто-то ещё: берём объединённую версию, не теряя того, что я успел сделать за это время
         const mineNow = JSON.parse(JSON.stringify(p));
         const next = normalizeProject(same(mineNow, JSON.parse(s)) ? merged : merge(JSON.parse(s), mineNow, merged));
@@ -140,6 +173,7 @@ export const store = {
         this.onRemote(next, 'merge');
         if (this.last !== JSON.stringify(merged)) this.touch();
       }
+      rememberCover(p);
       this.onStatus(isCloud(p.id) ? 'Сохранено в облаке' : storage.mode === 'server' ? 'Сохранено' : 'Сохранено в этом браузере');
     } catch (e) {
       if (isCloud(p.id)) {
@@ -210,7 +244,7 @@ export async function copyToCloud(p) {
   const imgs = [];
   eachImage(copy, (o, key) => { if (o[key] && !String(o[key]).startsWith('cloud:')) imgs.push([o, key]); });
   // id проекта нужен для загрузки картинок, поэтому сначала создаём проект, потом кладём картинки и сохраняем ещё раз
-  const id = await cloud.create(imgs.length ? { ...copy, plans: [], shots: [], script: { blocks: [] } } : copy);
+  const id = await cloud.create(imgs.length ? { ...copy, plans: [], shots: [], locations: [], script: { blocks: [] } } : copy);
   if (!imgs.length) return id;
   for (const [o, key] of imgs) {
     try { o[key] = await cloud.upload(id, await (await fetch(o[key])).blob()); } catch { /* картинку пропустим, проект важнее */ }
@@ -226,6 +260,7 @@ export async function copyToCloud(p) {
 function eachImage(p, fn) {
   for (const plan of p.plans) for (const o of plan.objects) if (o.type === 'image') fn(o, 'src');
   for (const s of p.shots) if (s.frame) fn(s, 'frame');
+  for (const l of p.locations || []) for (const ph of l.photos || []) fn(ph, 'src');
 }
 
 export async function exportProjectFile(p) {
@@ -260,6 +295,9 @@ export async function importProjectFile(file) {
 
 // ---------- мелочи ----------
 
+// Переход без следа в истории: после удаления страница удалённого не должна попадаться по «Назад».
+export function replaceHash(h) { store.replacing = true; location.replace(h); }
+
 export const safeName = name => String(name).replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'proekt';
 
 export function download(blob, name) {
@@ -280,9 +318,9 @@ export function toast(text) {
 }
 
 // Уменьшает выбранную картинку и кладёт её в хранилище; возвращает адрес и пропорции.
-export async function storeImage(file) {
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+export async function storeImage(file, max = 1800) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
@@ -291,12 +329,13 @@ export async function storeImage(file) {
   return { src, ratio: c.height / c.width };
 }
 
-export function pickFile(accept) {
+export function pickFile(accept, many = false) {
   return new Promise(resolve => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = accept;
-    input.onchange = () => resolve(input.files[0] || null);
+    input.multiple = many;
+    input.onchange = () => resolve(many ? [...input.files] : input.files[0] || null);
     input.click();
   });
 }

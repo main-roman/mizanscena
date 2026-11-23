@@ -17,7 +17,8 @@ async function libs() {
   if (!lib) {
     const shapes = await import(pathToFileURL(path.join(__dirname, 'public', 'shapes.js')).href);
     const cloud = await import(pathToFileURL(path.join(__dirname, 'public', 'cloud.js')).href);
-    lib = { FURN: shapes.FURN, LIGHTS: shapes.LIGHTS, LOOKS: shapes.LOOKS, API: cloud.API };
+    const bd = await import(pathToFileURL(path.join(__dirname, 'public', 'breakdown.js')).href);
+    lib = { FURN: shapes.FURN, LIGHTS: shapes.LIGHTS, LOOKS: shapes.LOOKS, API: cloud.API, bd };
   }
   return lib;
 }
@@ -389,6 +390,70 @@ const TOOLS = [
     }),
   },
   {
+    name: 'get_breakdown', title: 'Разбор сцен',
+    description: 'Разбор сценария по сценам: шапка (ИНТ/НАТ, место, время, день истории), длина в восьмых страницы, персонажи из текста и графы разбора, уже записанные в проект ' +
+      '(cast — персонажи сверх найденных в тексте, extras — массовка, props — реквизит, costume — костюм, makeup — грим, vehicles — транспорт, animals — животные, stunts — трюки, sfx — спецэффекты, sound — звук и музыка). ' +
+      'auto: true — запись не проверена человеком (найдена словарём программы или ИИ). Чтобы разобрать сцену по правилам, возьми задание «Разбор сцены по графам» или следуй правилам из инструкций сервера.',
+    inputSchema: S({ project: P, scene: { type: 'integer', description: 'Номер сцены; без него все сцены' } }, ['project']), annotations: { readOnlyHint: true },
+    run: async ({ project, scene }) => {
+      const { bd } = await libs();
+      const id = await resolve(project), p = normalize((await load(id)).data), list = Array.isArray(p.breakdown) ? p.breakdown : [];
+      const info = bd.sceneInfo(p).filter(x => !scene || x.n === scene);
+      if (scene && !info.length) throw new UserError(`Нет сцены ${scene}. Сцен в сценарии: ${bd.sceneInfo(p).length}.`);
+      return { scenes: info.map(x => ({ n: x.n, heading: x.text, ie: x.ie, place: x.place, time: x.time, day: x.day, length: bd.eighthsText(x.eighths), chars: x.chars,
+        items: list.filter(i => i.sceneId === x.id && !i.off).map(i => ({ id: i.id, cat: i.cat, text: i.text, auto: !!i.auto })) })) };
+    },
+  },
+  {
+    name: 'edit_breakdown', title: 'Править разбор сцен',
+    description: 'Записывает разбор сцены по графам. Перед работой прочитай правила разбора в инструкциях сервера или возьми готовое задание «Разбор сцены» (prompts). ' +
+      'ops: {op:"add", scene: номер, cat, text} — cat: cast, extras, props, costume, makeup, vehicles, animals, stunts, sfx, sound; ' +
+      '{op:"update", id, text?, cat?} — поправить свою непроверенную запись; {op:"remove", id} — убрать непроверенную запись; ' +
+      '{op:"clear_auto", scene: номер} — спрятать все непроверенные записи сцены (найденные словарём программы или раньше тобой), чтобы записать разбор заново. ' +
+      'Всё, что ты добавляешь, человек увидит в пунктирной рамке «проверьте». Записи, которые человек проверил или вписал сам, ты менять и убирать не можешь; убранное человеком не возвращай.',
+    inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
+    run: async ({ project, ops }) => {
+      const { bd } = await libs();
+      return edit(project, p => {
+        p.breakdown = Array.isArray(p.breakdown) ? p.breakdown : [];
+        const sc = scenes(p), added = [], changed = [], skipped = [];
+        const sceneOf = n => { const s = sc[(n || 0) - 1]; if (!s) throw new UserError(`Нет сцены ${n}. Сцен: ${sc.length}.`); return s; };
+        const catOk = c => { if (!bd.CATS[c]) throw new UserError(`Неизвестная графа ${c}. Графы: ${Object.keys(bd.CATS).join(', ')}.`); };
+        const mine = id => {
+          const it = p.breakdown.find(x => x.id === id);
+          if (!it) throw new UserError('Нет записи разбора ' + id);
+          if (!it.auto) { skipped.push({ id, why: 'проверено человеком' }); return null; }
+          return it;
+        };
+        for (const o of ops || []) {
+          if (o.op === 'add') {
+            const s = sceneOf(o.scene); catOk(o.cat);
+            const text = String(o.text || '').trim();
+            if (!text) throw new UserError('Пустой text');
+            const old = p.breakdown.find(x => x.sceneId === s.id && x.text.toLowerCase() === text.toLowerCase());
+            if (old && old.off && old.offBy !== 'ai') { skipped.push({ text, why: 'человек убрал эту запись' }); continue; }
+            if (old && !old.off) { skipped.push({ text, why: 'уже есть' }); continue; }
+            if (old) { Object.assign(old, { cat: o.cat, text, auto: true, off: false }); delete old.offBy; added.push(old.id); continue; }
+            const it = { id: uid(), sceneId: s.id, cat: o.cat, text, auto: true, off: false };
+            p.breakdown.push(it); added.push(it.id);
+          } else if (o.op === 'update') {
+            const it = mine(o.id); if (!it) continue;
+            if (o.cat) { catOk(o.cat); it.cat = o.cat; }
+            if (o.text) it.text = String(o.text).trim();
+            changed.push(it.id);
+          } else if (o.op === 'remove') {
+            const it = mine(o.id); if (!it) continue;
+            it.off = true; it.offBy = 'ai'; changed.push(it.id);
+          } else if (o.op === 'clear_auto') {
+            const s = sceneOf(o.scene);
+            for (const it of p.breakdown) if (it.sceneId === s.id && it.auto && !it.off) { it.off = true; it.offBy = 'ai'; changed.push(it.id); }
+          } else throw new UserError('Неизвестная операция ' + o.op);
+        }
+        return { ok: true, added, changed, skipped };
+      });
+    },
+  },
+  {
     name: 'get_reference', title: 'Справочник',
     description: 'Как устроены объекты плана: поля, виды мебели и декорации, световые приборы, типажи людей, матрицы камер. Вызови перед тем, как расставлять объекты.',
     inputSchema: S({}), annotations: { readOnlyHint: true },
@@ -417,9 +482,43 @@ const TOOLS = [
   },
 ];
 
-const INSTRUCTIONS = 'Мизансцена: программа режиссёра (сценарий, режиссёрский сценарий, Shot Designer — план сцены сверху с камерами, светом и персонажами, плюс 3D-вид). ' +
+// Правила разбора сцены по графам — так, как его делает Мизансцена. Их получает любой подключённый ИИ-помощник.
+const BREAKDOWN_RULES = `Правила разбора сцены по графам (как для КПП):
+1. Сначала прочитай текст сцены целиком (get_screenplay с номером сцены) и то, что уже записано (get_breakdown). Разбирай по тексту, ничего не придумывай. Если вывод не прямой, а догадка, допиши в конце «(?)».
+2. Графы: cast — персонажи, которых программа не нашла сама (дети, двойники, «только рука отца»); extras — массовка с числом («Труппа, 10–15 человек»); props — реквизит; costume — костюм с указанием на ком («Чёрный платок на маме»); makeup — грим; vehicles — транспорт; animals — животные; stunts — трюки и опасные действия; sfx — спецэффекты и то, что нужно решить на площадке или графикой; sound — звук и музыка в кадре и за кадром.
+3. Пиши конкретно, по одной вещи на запись, с тем признаком, который важен для подготовки: не «Кастрюля», а «Кастрюля с горячим маслом на плите»; не «Часы», а «Песочные часы: песка осталось мало». Если предмет меняется по ходу фильма, укажи состояние в этой сцене.
+4. Не путай упоминание с предметом в кадре: то, о чём только говорят, в разбор не идёт. Метафоры («красная слеза») переводи в то, что реально готовить («Капля варенья на щеке мамы»).
+5. Где решение неочевидно, подскажи способ: «(VFX или механика)», «(безопасная имитация)», «(дубль предмета)».
+6. Записи с пометкой auto: true — непроверенные (словарь программы или ты раньше). Если они неточные, спрячь их через clear_auto для этой сцены и запиши разбор заново. Записи, проверенные человеком, не трогай.
+7. Текст сценария не правь. Если заметил ошибку разметки (например, строка «АКТ 2» размечена как персонаж), скажи об этом человеку, а не исправляй сам.
+8. В конце коротко отчитайся человеку по-русски: сколько записей по каким сценам, что пометил как требующее решения, где сомневался.`;
+
+const INSTRUCTIONS = 'Мизансцена: программа режиссёра (сценарий, разбор сцен по графам, режиссёрский сценарий, локации, Shot Designer — план сцены сверху с камерами, светом и персонажами, плюс 3D-вид). ' +
   'Начни с list_projects и get_project. Перед расстановкой объектов вызови get_reference. Правки сразу видны в открытой программе. ' +
-  'Тексты сценария принадлежат автору: переписывай их, только если человек об этом просит.';
+  'Тексты сценария принадлежат автору: переписывай их, только если человек об этом просит. ' +
+  'Отвечай по-русски, сцены называй номерами.\n\n' + BREAKDOWN_RULES;
+
+// Готовые задания: в Claude Desktop они в меню «+», в Claude Code — команды /mcp__mizanscena__…
+const PROMPTS = [
+  {
+    name: 'breakdown_scene', title: 'Разбор сцены по графам',
+    description: 'Подробный разбор одной сцены: реквизит, костюм, грим, массовка, транспорт, трюки, эффекты, звук.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }, { name: 'scene', description: 'Номер сцены', required: true }],
+    text: a => `Сделай подробный разбор сцены ${a.scene} проекта «${a.project}» в Мизансцене и запиши его в программу через edit_breakdown.\n\n${BREAKDOWN_RULES}`,
+  },
+  {
+    name: 'breakdown_all', title: 'Разбор всего сценария по графам',
+    description: 'Подробный разбор каждой сцены сценария по графам, как для КПП.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }],
+    text: a => `Сделай подробный разбор всех сцен проекта «${a.project}» в Мизансцене и запиши его в программу через edit_breakdown. Иди по сценам по порядку, записывай каждую сцену отдельным вызовом. Следи, чтобы одни и те же предметы и костюмы назывались одинаково во всех сценах.\n\n${BREAKDOWN_RULES}`,
+  },
+  {
+    name: 'breakdown_check', title: 'Проверить разбор',
+    description: 'Сверить уже записанный разбор с текстом сценария: что пропущено, что лишнее, что названо по-разному.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }],
+    text: a => `Проверь разбор проекта «${a.project}» в Мизансцене: сверь записи (get_breakdown) с текстом сценария (get_screenplay). Найди пропущенное, лишнее (упомянуто, но не в кадре) и одно и то же, названное по-разному в разных сценах. Непроверенные записи исправь сам; про записи, проверенные человеком, только напиши, что предлагаешь поменять.\n\n${BREAKDOWN_RULES}`,
+  },
+];
 
 // ---------- JSON-RPC ----------
 async function handle(msg) {
@@ -432,12 +531,21 @@ async function handle(msg) {
     case 'initialize':
       return reply({
         protocolVersion: PROTOCOLS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOLS[0],
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
         serverInfo: { name: 'mizanscena', title: 'Мизансцена', version: ctx.version || '1.0.0' },
         instructions: INSTRUCTIONS,
       });
     case 'ping': return reply({});
     case 'tools/list': return reply({ tools: TOOLS.map(({ run, ...t }) => t) });
+    case 'prompts/list': return reply({ prompts: PROMPTS.map(({ text, ...pr }) => pr) });
+    case 'prompts/get': {
+      const pr = PROMPTS.find(x => x.name === params.name);
+      if (!pr) return fail(-32602, 'Нет задания ' + params.name);
+      const args = params.arguments || {};
+      const miss = pr.arguments.filter(x => x.required && !String(args[x.name] || '').trim()).map(x => x.name);
+      if (miss.length) return fail(-32602, 'Не хватает: ' + miss.join(', '));
+      return reply({ description: pr.description, messages: [{ role: 'user', content: { type: 'text', text: pr.text(args) } }] });
+    }
     case 'tools/call': {
       const tool = TOOLS.find(t => t.name === params.name);
       if (!tool) return fail(-32602, 'Нет инструмента ' + params.name);

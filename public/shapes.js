@@ -29,7 +29,8 @@ const rect = (x, y, w, h, rx = 0, fill = 'none') => `<rect x="${n(x)}" y="${n(y)
 const ell = (w, h, fill = WHITE) => `<ellipse rx="${n(w / 2)}" ry="${n(h / 2)}" fill="${fill}" ${st}/>`;
 const dot = (x, y, r, fill = INK) => `<circle cx="${n(x)}" cy="${n(y)}" r="${n(r)}" fill="${fill}"/>`;
 const ring = (x, y, r, fill = 'none') => `<circle cx="${n(x)}" cy="${n(y)}" r="${n(r)}" fill="${fill}" ${st}/>`;
-const ln = (d, extra = '') => `<path d="${d}" fill="none" ${st} ${extra}/>`;
+// своя толщина линии заменяет обычную: два stroke-width в одном теге ломают выгрузку плана картинкой
+const ln = (d, extra = '') => `<path d="${d}" fill="none" ${/stroke-width=/.test(extra) ? st.replace(/stroke-width="[^"]*"\s*/, '') : st} ${extra}/>`;
 
 // ---------- декорация ----------
 // cat: furn мебель, room интерьер, ext натура, gear съёмочная техника, people люди

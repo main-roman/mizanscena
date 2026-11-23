@@ -65,6 +65,23 @@ export function mountScript(el) {
   refresh();
 }
 
+// переход из панели сцены «Открыть сценарий»: лист сразу на нужной сцене
+export function showScene(id) {
+  if (!sheet) return;
+  const b = sheet.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!b) return;
+  caretTo(b, true);
+  // после того как экран сценария показан и свёрстан: сцена встаёт к верху листа
+  let tries = 0;
+  const place = () => {
+    const box = b.closest('.sc-scroll');
+    if (!box) return;
+    if (!box.clientHeight && tries++ < 40) return setTimeout(place, 50); // программа ещё запускается
+    box.scrollTop += b.getBoundingClientRect().top - box.getBoundingClientRect().top - 24;
+  };
+  setTimeout(place, 30);
+}
+
 export function unmountScript() {
   if (!root) return;
   if (syncTimer) { clearTimeout(syncTimer); sync(); }

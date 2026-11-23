@@ -1,7 +1,8 @@
 // Shot Designer: план сцены сверху и его 3D-вид. Работает с одним планом открытого проекта.
-import { store, $, $$, uid, esc, reduced, toast, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, normalizePlan, SIZES, MOVES } from './store.js';
+import { store, $, $$, uid, esc, reduced, toast, replaceHash, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, normalizePlan, SIZES, MOVES } from './store.js';
 import { storage, srcOf } from './storage.js';
 import { scrubField } from './ui.js';
+import { exportPlan } from './planexport.js';
 import { height3d, kelvinToHex, defaultKelvin, drawObject, drawIcon, gridPattern, extent, fov, caption, bounds, sorted, planSVG, emits, COLORS, SENSORS, FURN, FURN_CATS, LIGHTS, LIGHT, PAPER, LOOKS, POSES } from './shapes.js';
 
 const svg = $('#plan'), world = $('#world'), handles = $('#handles'), defs = $('#defs'), ink = $('#ink'), ctx = $('#ctx');
@@ -913,8 +914,40 @@ addEventListener('keydown', e => {
 // ---------- панель: вкладки ----------
 
 // На телефоне панель выезжает снизу: open раскрывает её, toggle сворачивает по повторному нажатию на ту же вкладку.
+// Правую панель (Объект, Кадры, План) можно свернуть, чтобы план занял всё место; состояние запоминается.
+let sideOff = false;
+try { sideOff = localStorage.getItem('miz:side-off') === '1'; } catch { /* по умолчанию открыта */ }
+function setSide(show) {
+  sideOff = !show;
+  $('#view-plan .work').classList.toggle('side-off', sideOff);
+  const b = $('#side-btn');
+  b.title = b.ariaLabel = sideOff ? 'Показать панель' : 'Свернуть панель';
+  b.setAttribute('aria-pressed', String(sideOff));
+  try { localStorage.setItem('miz:side-off', sideOff ? '1' : '0'); } catch { /* не страшно */ }
+}
+setSide(!sideOff);
+$('#side-btn').addEventListener('click', () => setSide(sideOff));
+
+// Кнопка локации над планом: открывает локацию рядом, а если её нет, ведёт к выбору на вкладке «План».
+function renderLocChip() {
+  // локация не выбрана явно: берём ту, к которой привязана сцена плана
+  const ls = project().locations, b = $('#loc-btn');
+  const l = ls.find(x => x.id === scene.locationId) || (!scene.locationId && scene.sceneId && ls.find(x => x.sceneIds.includes(scene.sceneId))) || null;
+  $('span', b).textContent = l ? l.name : 'Локация';
+  b.classList.toggle('empty', !l);
+  b.title = l ? 'Показать локацию рядом' : 'Выбрать локацию для плана';
+  if (l) b.dataset.locOpen = l.id; else delete b.dataset.locOpen;
+}
+$('#loc-btn').addEventListener('click', e => {
+  if (e.currentTarget.dataset.locOpen) return; // откроет общий обработчик
+  showTab('scene', true);
+  const sel = $('#pane-scene [data-key="locationId"]');
+  if (sel) sel.focus(); else toast('Сначала создайте локацию в разделе «Локации»');
+});
+
 function showTab(name, open = false, toggle = false) {
   const panel = $('#panel');
+  if ((open || toggle) && sideOff) setSide(true);
   const current = $('#panel .tabs [aria-selected="true"]').dataset.tab;
   if (toggle && current === name && panel.classList.contains('open')) panel.classList.remove('open');
   else if (open || toggle) panel.classList.add('open');
@@ -1069,7 +1102,7 @@ function openCtx(x, y, id) {
       + item('prev', 'Движение к предыдущей фазе', prev ? `откуда пришёл в «${prev.name}»` : 'будет создана фаза перед этой') : '')
     + (o.type === 'light' && emits(o.kind) ? item('toggle', o.off ? 'Включить' : 'Выключить') : '')
     + (o.type === 'camera' ? item('look', 'Смотреть через эту камеру') : '')
-    + item('settings', 'Настройки справа')
+    + item('settings', 'Настройки')
     + item('dup', 'Дублировать') + item('del', 'Удалить')
     + '</div>';
   placeCtx(x, y);
@@ -1177,6 +1210,7 @@ $('#pane-shots').addEventListener('input', e => {
 // ---------- панель: план ----------
 
 function renderPlanPane() {
+  renderLocChip();
   const locked = scene.objects.filter(o => o.type === 'image' && o.locked);
   const scenes = scenesOf(project());
   $('#pane-scene').innerHTML = `
@@ -1184,6 +1218,10 @@ function renderPlanPane() {
     <label class="field"><span>Сцена из сценария</span><select data-key="sceneId"><option value="">Не привязан</option>${scenes.map((s, i) =>
       `<option value="${s.id}"${s.id === scene.sceneId ? ' selected' : ''}>${i + 1}. ${esc(s.text)}</option>`).join('')}</select>
       <small>${scenes.length ? 'Новые кадры этого плана попадут в эту сцену режиссёрского сценария.' : 'Сцены появятся здесь, когда в сценарии будут строки «Время и место».'}</small></label>
+    ${scene.sceneId && scenes.some(s => s.id === scene.sceneId) ? `<div class="actions plan-scene-btn"><button class="act" data-scene-open="${scene.sceneId}">Показать сцену рядом</button></div>` : ''}
+    ${project().locations.length ? `<label class="field"><span>Локация</span><select data-key="locationId"><option value="">Не выбрана</option>${project().locations.map(l =>
+      `<option value="${l.id}"${l.id === scene.locationId ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
+      ${scene.locationId && project().locations.some(l => l.id === scene.locationId) ? `<div class="actions plan-scene-btn"><button class="act" data-loc-open="${scene.locationId}">Показать локацию рядом</button></div>` : ''}` : ''}
     ${scrubField('wallHeight', 'Высота стен в 3D, м', scene.wallHeight ?? 2.7, { step: 0.05, min: 0.3, max: 12 })}
     <div class="pair"><label class="field"><span>Цвет стен</span><input type="color" data-key="wallColor" value="${scene.wallColor || '#E8E4DC'}"></label>
     <label class="field"><span>Цвет пола</span><input type="color" data-key="floorColor" value="${scene.floorColor || '#FFFFFF'}"></label></div>
@@ -1191,9 +1229,10 @@ function renderPlanPane() {
     <label class="field"><span>Заметки</span><textarea data-key="note" rows="3">${esc(scene.note)}</textarea></label>
     ${locked.length ? `<div class="actions"><button class="act" data-act="unlock">Открепить фото-подложку</button></div>` : ''}
     <p class="sub">Выгрузить</p>
-    <div class="actions">
-      <button class="act main" data-act="print">Печать или PDF</button>
-      <button class="act" data-act="png">План картинкой PNG</button>
+    <div class="actions three">
+      <button class="act main" data-act="jpg">JPG</button>
+      <button class="act" data-act="png">PNG</button>
+      <button class="act" data-act="pdf">PDF</button>
     </div>
     <p class="sub">План</p>
     <div class="actions two">
@@ -1211,12 +1250,12 @@ $('#pane-scene').addEventListener('input', e => {
 $('#pane-scene').addEventListener('change', e => {
   commit();
   if (e.target.dataset.key === 'name') $('#scene-select').selectedOptions[0].textContent = scene.name;
+  if (e.target.dataset.key === 'sceneId' || e.target.dataset.key === 'locationId') renderPlanPane();
 });
 $('#pane-scene').addEventListener('click', async e => {
   const act = (e.target.closest('button') || {}).dataset?.act;
   if (!act) return;
-  if (act === 'print') printHTML(`<h1>${esc(scene.name)}</h1>${scene.note ? `<p>${esc(scene.note)}</p>` : ''}${planSVG(scene, { pad: 1 })}`, 'size: A4 landscape; margin: 12mm;', safeName(scene.name));
-  if (act === 'png') exportPNG();
+  if (act === 'jpg' || act === 'png' || act === 'pdf') exportPlan(scene, act);
   if (act === 'copy') { const c = JSON.parse(JSON.stringify(scene)); c.name += ', копия'; goto(createPlan(c)); toast('Создана копия плана'); }
   if (act === 'unlock') { scene.objects.forEach(o => { if (o.type === 'image') o.locked = false; }); commit(); renderAll(); toast('Подложку снова можно двигать'); }
   if (act === 'remove') {
@@ -1226,37 +1265,10 @@ $('#pane-scene').addEventListener('click', async e => {
     p.shots.forEach(s => { if (s.planId === scene.id) { s.planId = ''; s.cameraId = ''; s.phaseId = ''; } });
     p.plans = p.plans.filter(x => x.id !== scene.id);
     store.touch();
-    location.hash = `#/p/${p.id}`;
+    replaceHash(`#/p/${p.id}/plans`);
     toast('План удалён');
   }
 });
-
-async function exportPNG() {
-  const b = bounds(scene), pad = 1, w0 = b.w + pad * 2, h0 = b.h + pad * 2;
-  const ppm = Math.min(220, 4200 / Math.max(w0, h0));
-  const w = Math.round(w0 * ppm), h = Math.round(h0 * ppm);
-  let markup = planSVG(scene, { pad, attrs: `width="${w}" height="${h}"` })
-    .replace('</svg>', `<defs>${gridPattern('', 'g2')}</defs><rect x="${b.x - pad}" y="${b.y - pad}" width="${w0}" height="${h0}" fill="url(#g2)" pointer-events="none"/></svg>`);
-  // картинки-подложки встраиваем внутрь, иначе браузер не нарисует их в PNG
-  for (const o of scene.objects.filter(q => q.type === 'image' && !q.src.startsWith('data:'))) {
-    try {
-      const blob = await (await fetch(srcOf(o.src))).blob();
-      const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); });
-      markup = markup.split(`href="${esc(srcOf(o.src))}"`).join(`href="${data}"`);
-    } catch { /* подложка просто не попадёт в картинку */ }
-  }
-  const img = new Image();
-  img.onload = () => {
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    const g = c.getContext('2d');
-    g.fillStyle = PAPER; g.fillRect(0, 0, w, h);
-    g.drawImage(img, 0, 0, w, h);
-    c.toBlob(blob => download(blob, safeName(scene.name) + '.png'), 'image/png');
-  };
-  img.onerror = () => toast('Не получилось собрать картинку');
-  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markup);
-}
 
 // ---------- 3D-вид ----------
 

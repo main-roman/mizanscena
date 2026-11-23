@@ -37,12 +37,15 @@ export const storage = {
   async put(p) {
     if (isCloud(p.id)) return cloud.put(p);
     if (this.mode === 'server') {
-      return api('/api/projects/' + p.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      // ответ сервера ({ ok: true }) наружу не отдаём: вернуть можно только объединённый проект из облака
+      await api('/api/projects/' + p.id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      return null;
     }
     localStorage.setItem(lsKey(p.id), JSON.stringify(p));
     const index = lsIndex().filter(s => s.id !== p.id);
     index.push({ id: p.id, name: p.name, mtime: Date.now(), plans: p.plans.length, shots: p.shots.length, cover: p.plans[0] || null });
     localStorage.setItem(LS_INDEX, JSON.stringify(index));
+    return null;
   },
 
   async remove(id) {
