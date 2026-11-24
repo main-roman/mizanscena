@@ -18,7 +18,8 @@ async function libs() {
     const shapes = await import(pathToFileURL(path.join(__dirname, 'public', 'shapes.js')).href);
     const cloud = await import(pathToFileURL(path.join(__dirname, 'public', 'cloud.js')).href);
     const bd = await import(pathToFileURL(path.join(__dirname, 'public', 'breakdown.js')).href);
-    lib = { FURN: shapes.FURN, LIGHTS: shapes.LIGHTS, LOOKS: shapes.LOOKS, API: cloud.API, bd };
+    const sm = await import(pathToFileURL(path.join(__dirname, 'public', 'schedmodel.js')).href);
+    lib = { FURN: shapes.FURN, LIGHTS: shapes.LIGHTS, LOOKS: shapes.LOOKS, API: cloud.API, bd, sm };
   }
   return lib;
 }
@@ -454,6 +455,273 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_crew', title: 'Группа',
+    description: 'Актёры (персонаж, актёр, телефон, число сцен) и съёмочная группа по цехам: должность, имя, этап (В поисках, Найден, Требуется решение, Утверждён, Ещё не связались, Связались, Отказался), город, телефон или @telegram, почта, заметка, lead — показывать в «Руководителях группы» вызывного.',
+    inputSchema: S({ project: P }, ['project']), annotations: { readOnlyHint: true },
+    run: async ({ project }) => {
+      const { sm } = await libs();
+      const id = await resolve(project), p = normalize((await load(id)).data);
+      sm.normalizeSchedule(p, uid);
+      return {
+        cast: sm.castList(p).map(c => ({ n: c.n, character: c.char, actor: c.actor, phone: c.phone, scenes: c.scenes.length })),
+        departments: sm.DEPARTMENTS,
+        crew: p.schedule.info.crew.map(({ id: rid, dept, role, name, status, city, phone, email, note, lead }) => ({ id: rid, dept, role, name, status, city, phone, email, note, lead })),
+      };
+    },
+  },
+  {
+    name: 'edit_crew', title: 'Править группу',
+    description: 'ops: {op:"add", role, name, dept?, status?, city?, phone?, email?, note?, lead?} — цех по должности определяется сам; ' +
+      '{op:"update", id, ...поля}; {op:"remove", id}; {op:"actor", character, actor?, phone?, makeupMin?, costumeMin?, carMin?, busy?: [{date, kind:"busy"|"part", note}]} — кто играет персонажа, сколько минут на грим и костюм, за сколько до готовности машина, когда актёр занят. ' +
+      'Телефон пиши как есть, ник в Telegram — с @. Должности пиши полностью: «Художник по костюму», а не «Худ. по кост».',
+    inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
+    run: async ({ project, ops }) => {
+      const { sm } = await libs();
+      return edit(project, p => {
+        sm.normalizeSchedule(p, uid);
+        const crew = p.schedule.info.crew, done = [];
+        const F = ['role', 'name', 'status', 'city', 'phone', 'email', 'note'];
+        for (const o of ops || []) {
+          if (o.op === 'add') {
+            const dept = sm.DEPARTMENTS.includes(o.dept) ? o.dept : sm.guessDept(o.role);
+            const r = { id: uid(), dept, lead: o.lead !== undefined ? !!o.lead : (sm.ROLES[dept] || []).some(([x, l]) => l && x.toLowerCase() === String(o.role || '').toLowerCase()) };
+            for (const k of F) r[k] = String(o[k] || '').trim();
+            crew.push(r); done.push(r.id);
+          } else if (o.op === 'update') {
+            const r = crew.find(x => x.id === o.id);
+            if (!r) throw new UserError('Нет человека ' + o.id);
+            for (const k of F) if (o[k] !== undefined) r[k] = String(o[k]).trim();
+            if (o.dept && sm.DEPARTMENTS.includes(o.dept)) r.dept = o.dept;
+            if (o.lead !== undefined) r.lead = !!o.lead;
+            done.push(r.id);
+          } else if (o.op === 'remove') {
+            const before = crew.length;
+            p.schedule.info.crew = crew.filter(x => x.id !== o.id);
+            if (before === p.schedule.info.crew.length) throw new UserError('Нет человека ' + o.id);
+            done.push(o.id);
+          } else if (o.op === 'actor') {
+            const char = String(o.character || '').trim().toUpperCase();
+            if (!char) throw new UserError('Нужен character');
+            let r = p.schedule.cast.find(c => c.char.toUpperCase() === char);
+            if (!r) { r = { id: uid(), char, actor: '', phone: '' }; p.schedule.cast.push(r); }
+            if (o.actor !== undefined) r.actor = String(o.actor).trim();
+            if (o.phone !== undefined) r.phone = String(o.phone).trim();
+            for (const k of ['makeupMin', 'costumeMin', 'carMin']) if (o[k] !== undefined) r[k] = Math.max(0, Math.round(+o[k] || 0));
+            if (Array.isArray(o.busy)) r.busy = o.busy.filter(b => b && /^\d{4}-\d{2}-\d{2}$/.test(b.date)).map(b => ({ date: b.date, kind: b.kind === 'part' ? 'part' : 'busy', note: String(b.note || '') }));
+            done.push(char);
+          } else throw new UserError('Неизвестная операция ' + o.op);
+        }
+        return { ok: true, done };
+      });
+    },
+  },
+  {
+    name: 'get_schedule', title: 'КПП',
+    description: 'КПП (календарно-постановочный план) открытого варианта раскладки: дни (id, номер смены, дата, тип дня, ночная, зафиксирован, сбор, сцены и плашки по порядку, страницы в восьмых, хронометраж, восход и закат по адресу локации), неразложенные сцены, ' +
+      'все сцены с тем, что важно для раскладки (инт/нат, режим, сценарный день, объект и подобъект, локация, длина в восьмых, хронометраж, персонажи, массовка, транспорт, животные, трюки, спецэффекты, грим), актёры и их занятость по датам, другие варианты раскладки.',
+    inputSchema: S({ project: P }, ['project']), annotations: { readOnlyHint: true },
+    run: async ({ project }) => {
+      const { sm, bd } = await libs();
+      const id = await resolve(project), p = prepSchedule((await load(id)).data, sm, bd);
+      const info = bd.sceneInfo(p), cast = sm.castList(p, info), done = sm.scheduledIds(p);
+      const wd = d => d ? new Date(d + 'T12:00').toLocaleDateString('ru-RU', { weekday: 'short' }) : '';
+      return {
+        variant: sm.variantTitle(p.schedule), other_variants: p.schedule.variants.map(v => ({ id: v.id, name: v.name || 'Основной', shifts: v.days.filter(d => d.kind === 'work').length })),
+        start: p.schedule.info.start,
+        days: p.schedule.days.map(d => {
+          const di = sm.dayInfo(p, d, info, cast);
+          return {
+            id: d.id, shift: sm.shiftNo(p, d) || null, date: d.date, weekday: wd(d.date), kind: d.kind, night: d.night, locked: d.locked, call: d.call, note: d.kppNote,
+            items: d.items.map(x => x.type === 'banner' ? { banner: x.text } : info.find(q => q.id === x.sceneId)?.n).filter(x => x !== undefined),
+            eighths: di.eighths, screen_time: sm.clockText(di.dur), sun: di.sun ? { sunrise: di.sun.sunrise, sunset: di.sun.sunset } : null,
+          };
+        }),
+        unscheduled: info.filter(x => !done.has(x.id)).map(x => x.n),
+        scenes: info.map(x => {
+          const it = bd.sceneItems(p, x.id, info), l = p.locations.filter(q => q.sceneIds.includes(x.id));
+          const o = {
+            n: x.n, ie: x.ie, time: x.time, story_day: x.day, place: x.place || x.text, object: sm.objectOf(p, x).name, sub_object: sm.objectOf(p, x).sub,
+            locations: l.map(q => q.name + (q.geo ? '' : ' (без адреса)')), eighths: x.eighths, screen_time: x.dur, characters: x.chars,
+          };
+          for (const k of ['extras', 'vehicles', 'animals', 'stunts', 'sfx', 'makeup']) if (it[k].length) o[k] = it[k];
+          return o;
+        }),
+        cast: cast.map(c => ({ n: c.n, character: c.char, actor: c.actor, scenes: c.scenes.length, busy: (p.schedule.cast.find(r => r.char.toUpperCase() === c.char) || {}).busy || [] })),
+      };
+    },
+  },
+  {
+    name: 'edit_schedule', title: 'Править КПП',
+    description: 'Правка КПП открытого варианта. Дни указываются по id из get_schedule (или датой YYYY-MM-DD), сцены — номерами. ops: ' +
+      '{op:"start", date} — первый день: все дни получают даты подряд от него; {op:"new_variant", name, copy?:false} — сохранить текущую раскладку как вариант и начать новую (copy:true — с копии текущей); ' +
+      '{op:"add_day", date?, kind?:"work"|"off"|"rest"|"prep", night?, call?, note?, items?:[номер сцены | {banner:"Обед"}]} — день в конец (дата по умолчанию следующая), вернёт id; ' +
+      '{op:"set_day", day, date?, kind?, night?, call?, note?} — поля дня; ' +
+      '{op:"set_items", day, items:[номер | {banner}]} — весь порядок дня: эти сцены уходят из других дней, прежние сцены дня возвращаются в неразложенные; ' +
+      '{op:"move_scene", scene, day|null, index?} — переставить сцену в день (null — убрать в неразложенные); ' +
+      '{op:"remove_day", day} — удалить день, его сцены вернутся в неразложенные. ' +
+      'Зафиксированные дни (locked) не меняются: правка в них вернёт ошибку.',
+    inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
+    run: async ({ project, ops }) => {
+      const { sm, bd } = await libs();
+      return edit(project, p => {
+        prepSchedule(p, sm, bd);
+        const sch = () => p.schedule, info = bd.sceneInfo(p), done = [];
+        const sceneId = n => { const x = info.find(q => String(q.n) === String(n)); if (!x) throw new UserError(`Нет сцены ${n}`); return x.id; };
+        const dayOf = ref => { const d = sch().days.find(x => x.id === ref) || sch().days.find(x => x.date && x.date === ref); if (!d) throw new UserError(`Нет дня ${ref}. Дни: ${sch().days.map(x => `${x.id} (${x.date || 'без даты'})`).join(', ')}`); return d; };
+        const open = d => { if (d.locked) throw new UserError(`День ${d.date || d.id} зафиксирован, его менять нельзя. Попросите человека снять фиксацию.`); return d; };
+        const pull = sid => { for (const d of sch().days) { const i = d.items.findIndex(x => x.sceneId === sid); if (i >= 0) { open(d); d.items.splice(i, 1); } } };
+        const items = list => (list || []).map(x => {
+          if (x && typeof x === 'object' && 'banner' in x) return { id: uid(), type: 'banner', text: String(x.banner) };
+          const sid = sceneId(x); pull(sid); return { id: uid(), type: 'scene', sceneId: sid };
+        });
+        const fields = (d, o) => {
+          if (o.date !== undefined) { if (o.date && !/^\d{4}-\d{2}-\d{2}$/.test(o.date)) throw new UserError('Дата в виде YYYY-MM-DD'); d.date = o.date; }
+          if (o.kind !== undefined) { if (!sm.DAY_KINDS[o.kind]) throw new UserError('kind: work, off, rest или prep'); d.kind = o.kind; }
+          if (o.night !== undefined) d.night = !!o.night;
+          if (o.call !== undefined) d.call = String(o.call);
+          if (o.note !== undefined) d.kppNote = String(o.note);
+        };
+        for (const o of ops || []) {
+          if (o.op === 'start') { if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date || '')) throw new UserError('start: дата YYYY-MM-DD'); sm.datesFrom(p, o.date); done.push('start ' + o.date); }
+          else if (o.op === 'new_variant') { sm.newVariant(p, uid, String(o.name || `Вариант ${sch().variants.length + 2}`), !!o.copy); done.push('variant: ' + o.name); }
+          else if (o.op === 'add_day') {
+            const d = { id: 'day-' + uid(), date: sm.nextDate(p), call: '08:00', wrap: '', lunch: '', weather: '', note: '', items: [], times: {}, kind: 'work', night: false, locked: false };
+            fields(d, o);
+            sch().days.push(d);
+            d.items = items(o.items);
+            done.push(d.id);
+          } else if (o.op === 'set_day') { const d = open(dayOf(o.day)); fields(d, o); done.push(d.id); }
+          else if (o.op === 'set_items') { const d = open(dayOf(o.day)); d.items = []; d.items = items(o.items); done.push(d.id); }
+          else if (o.op === 'move_scene') {
+            const sid = sceneId(o.scene); pull(sid);
+            if (o.day !== null && o.day !== undefined) { const d = open(dayOf(o.day)); const i = Number.isInteger(o.index) ? Math.max(0, Math.min(o.index, d.items.length)) : d.items.length; d.items.splice(i, 0, { id: uid(), type: 'scene', sceneId: sid }); }
+            done.push(String(o.scene));
+          } else if (o.op === 'remove_day') { const d = open(dayOf(o.day)); p.schedule.days = sch().days.filter(x => x !== d); done.push(d.id); }
+          else throw new UserError('Неизвестная операция ' + o.op);
+        }
+        sm.sortDays(p);
+        sm.normalizeSchedule(p, uid);
+        return { ok: true, done, variant: sm.variantTitle(p.schedule), days: p.schedule.days.map(d => ({ id: d.id, shift: sm.shiftNo(p, d) || null, date: d.date, kind: d.kind, scenes: d.items.filter(x => x.type === 'scene').map(x => info.find(q => q.id === x.sceneId)?.n) })) };
+      });
+    },
+  },
+  {
+    name: 'get_callsheet', title: 'Вызывной лист',
+    description: 'Вызывной лист съёмочного дня (day — id дня или дата YYYY-MM-DD из get_schedule): поля смены (сбор группы, начало смены, мотор, стоп-мотор, обед с концом, погода, примечания), ' +
+      'план дня по времени (обед уже вставлен по ячейке «Обед»), объекты дня с подобъектами, адресом, базой группы и примечанием, время актёров (посчитанное по плану и минутам на грим и костюм, и вписанное руками), цеха и спецтранспорт, включённые блоки.',
+    inputSchema: S({ project: P, day: { type: 'string' } }, ['project', 'day']), annotations: { readOnlyHint: true },
+    run: async ({ project, day }) => {
+      const { sm, bd } = await libs();
+      const id = await resolve(project), p = prepSchedule((await load(id)).data, sm, bd);
+      const d = findDay(p, day), info = bd.sceneInfo(p), cast = sm.castList(p, info), di = sm.dayInfo(p, d, info, cast);
+      const auto = sm.autoTimes(p, d, info);
+      const objs = [];
+      for (const s of di.scenes) {
+        const o = sm.objectOf(p, s);
+        let g = objs.find(x => x.object === o.name);
+        if (!g) {
+          const k = t => String(t || '').toUpperCase().replace(/Ё/g, 'Е').replace(/\s+/g, ' ').trim(), all = p.locations.filter(l => k(l.object) === k(o.name));
+          const val = f => (all.find(l => (l[f] || '').trim()) || {})[f] || ''; // адрес, база, примечание — со всего объекта
+          objs.push(g = { object: o.name, address: val('geo'), base: val('base'), note: val('hint'), has_location: !!o.loc, subs: [] });
+        }
+        const sub = o.sub || '';
+        let x = g.subs.find(q => q.sub === sub); if (!x) g.subs.push(x = { sub, scenes: [] }); x.scenes.push(s.n);
+      }
+      const F = ['call', 'motor', 'stop', 'lunch', 'meetTime', 'meet', 'meetNote', 'weather', 'tDay', 'tNight', 'sun', 'note', 'limits', 'kppNote'];
+      return {
+        day: { id: d.id, shift: sm.shiftNo(p, d) || null, date: d.date, kind: d.kind, night: d.night, locked: d.locked },
+        fields: { ...Object.fromEntries(F.map(k => [k, d[k] || ''])), lunchEnd: sm.lunchEndOf(d), meetTime: d.meetTime || d.call },
+        sun: di.sun ? { sunrise: di.sun.sunrise, sunset: di.sun.sunset, dawn: di.sun.dawn, dusk: di.sun.dusk } : null,
+        plan: sm.timeline(p, d, info).map(r => r.scene ? { time: `${r.start}–${r.end}`, scene: r.scene.n, object: sm.objectOf(p, r.scene).name, sub: sm.objectOf(p, r.scene).sub, ie: r.scene.ie, mode: r.scene.time, characters: r.scene.chars } : { time: `${r.start}–${r.end}`, banner: r.item.text, ...(r.auto ? { from_lunch_cell: true } : {}) }),
+        objects: objs,
+        cast: di.cast.map(c => ({ character: c.char, actor: c.actor, auto: auto.cast[c.char] || {}, own: d.times[c.char] || {} })),
+        depts: (d.depts || sm.DEFAULT_DEPTS.map(name => ({ name, time: '', off: false }))).map(r => ({ name: r.name, time: r.time || d.call, needed: !r.off })),
+        transport: (d.transport || sm.DEFAULT_TRANSPORT.map(name => ({ name, time: '', off: false }))).map(r => ({ name: r.name, time: r.time || d.call, needed: !r.off })),
+        blocks: Object.fromEntries(p.schedule.info.blocks.map(b => [b.id, b.on])),
+      };
+    },
+  },
+  {
+    name: 'edit_callsheet', title: 'Заполнить вызывной лист',
+    description: 'Заполнить вызывной лист дня. set: {call, motor, stop, lunch, lunchEnd, meetTime, meet, meetNote, weather, tDay, tNight, note, limits} — время «ЧЧ:ММ», пустая строка возвращает значение по умолчанию; ' +
+      'copy_from: id или дата другого дня — перенести время смены, сбор группы, цеха и транспорт, примечания (план и время актёров не переносятся); ' +
+      'depts / transport: [{name, time?, needed?}] — весь список целиком; times: {ПЕРСОНАЖ: {car?, arrive?, costume?, makeup?, ready?, end?}} — время актёров руками (пустая строка — снова по плану); ' +
+      'blocks: {id: true|false} — показать или убрать блок (meet, shift, crew, depts, transport, locs, limits, note, kpp, cast, extras, next, plan).',
+    inputSchema: S({ project: P, day: { type: 'string' }, set: { type: 'object' }, copy_from: { type: 'string' }, depts: { type: 'array', items: { type: 'object' } }, transport: { type: 'array', items: { type: 'object' } }, times: { type: 'object' }, blocks: { type: 'object' } }, ['project', 'day']),
+    run: async a => {
+      const { sm, bd } = await libs();
+      return edit(a.project, p => {
+        prepSchedule(p, sm, bd);
+        const d = findDay(p, a.day), done = [];
+        if (d.locked) throw new UserError(`День ${d.date || d.id} зафиксирован. Попросите человека снять фиксацию.`);
+        const T = /^(\d{1,2}):(\d{2})$/, TIME = ['call', 'motor', 'stop', 'lunch', 'lunchEnd', 'meetTime'];
+        if (a.copy_from) {
+          const from = findDay(p, a.copy_from);
+          for (const k of ['call', 'motor', 'stop', 'lunch', 'lunchEnd', 'meetTime', 'meet', 'meetNote', 'note', 'limits', 'depts', 'transport', 'cells']) {
+            const v = from[k] === undefined ? undefined : JSON.parse(JSON.stringify(from[k]));
+            if (Array.isArray(v)) for (const r of v) if (r && r.id) r.id = uid();
+            if (v !== undefined) d[k] = v;
+          }
+          done.push('copy_from ' + (from.date || from.id));
+        }
+        for (const [k, v] of Object.entries(a.set || {})) {
+          if (!['call', 'motor', 'stop', 'lunch', 'lunchEnd', 'meetTime', 'meet', 'meetNote', 'weather', 'tDay', 'tNight', 'note', 'limits', 'kppNote', 'sun'].includes(k)) throw new UserError('Нельзя менять поле ' + k);
+          const val = String(v ?? '').trim();
+          if (TIME.includes(k) && val && !T.test(val)) throw new UserError(`${k}: время в виде ЧЧ:ММ`);
+          d[k] = TIME.includes(k) && val ? val.padStart(5, '0') : val; done.push(k);
+        }
+        for (const key of ['depts', 'transport']) if (Array.isArray(a[key])) {
+          d[key] = a[key].map(r => ({ id: uid(), name: String(r.name || '').trim(), time: String(r.time || '').trim(), off: r.needed === false }));
+          done.push(key);
+        }
+        for (const [char, t] of Object.entries(a.times || {})) {
+          const c = char.toUpperCase(), row = (d.times[c] = d.times[c] || {});
+          for (const [f, v] of Object.entries(t || {})) {
+            if (!['car', 'arrive', 'costume', 'makeup', 'ready', 'end'].includes(f)) throw new UserError('Поле времени актёра: car, arrive, costume, makeup, ready, end');
+            if (v) row[f] = String(v); else delete row[f];
+          }
+          done.push('times ' + c);
+        }
+        for (const [id, on] of Object.entries(a.blocks || {})) {
+          const b = p.schedule.info.blocks.find(x => x.id === id);
+          if (!b) throw new UserError('Нет блока ' + id);
+          b.on = !!on; done.push('block ' + id);
+        }
+        sm.normalizeSchedule(p, uid);
+        return { ok: true, done, lunch: d.lunch ? `${d.lunch}–${sm.lunchEndOf(d)}` : '' };
+      });
+    },
+  },
+  {
+    name: 'edit_objects', title: 'Объекты и адреса',
+    description: 'Адрес, база группы и примечание для группы — общие для объекта (дом, стадион): правка одного подобъекта меняет все. ' +
+      'ops: [{object?: "Дом Батыра" | scene?: номер сцены, address?, base?, note?}] — по названию объекта или по сцене. ' +
+      'Если у места сцены ещё нет локации, она заводится сама (объект и подобъект из шапки «ДОМ. КОМНАТА»).',
+    inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
+    run: async ({ project, ops }) => {
+      const { sm, bd } = await libs();
+      return edit(project, p => {
+        prepSchedule(p, sm, bd);
+        const info = bd.sceneInfo(p), key = t => String(t || '').toUpperCase().replace(/Ё/g, 'Е').replace(/\s+/g, ' ').trim(), done = [];
+        for (const o of ops || []) {
+          let l = null;
+          if (o.scene !== undefined) {
+            const s = info.find(x => String(x.n) === String(o.scene));
+            if (!s) throw new UserError('Нет сцены ' + o.scene);
+            l = p.locations.find(x => x.sceneIds.includes(s.id)) || bd.locationFromScene(p, s.id, uid);
+          } else {
+            l = p.locations.find(x => key(x.object) === key(o.object));
+            if (!l) throw new UserError(`Нет объекта «${o.object}». Объекты: ${[...new Set(p.locations.map(x => x.object))].join(', ') || 'нет'}. Новый объект заводится по сцене: {scene: N}.`);
+          }
+          for (const [f, k] of [['address', 'geo'], ['base', 'base'], ['note', 'hint']]) if (o[f] !== undefined) for (const x of p.locations) if (key(x.object) === key(l.object)) x[k] = String(o[f]).trim();
+          done.push(l.object);
+        }
+        prepSchedule(p, sm, bd);
+        return { ok: true, done, objects: [...new Set(p.locations.map(x => x.object))].map(name => { const l = p.locations.find(x => x.object === name); return { object: name, address: l.geo, base: l.base, note: l.hint, subs: p.locations.filter(x => x.object === name).map(x => x.sub).filter(Boolean) }; }) };
+      });
+    },
+  },
+  {
     name: 'get_reference', title: 'Справочник',
     description: 'Как устроены объекты плана: поля, виды мебели и декорации, световые приборы, типажи людей, матрицы камер. Вызови перед тем, как расставлять объекты.',
     inputSchema: S({}), annotations: { readOnlyHint: true },
@@ -482,6 +750,53 @@ const TOOLS = [
   },
 ];
 
+function findDay(p, ref) {
+  const d = p.schedule.days.find(x => x.id === ref) || p.schedule.days.find(x => x.date && x.date === ref);
+  if (!d) throw new UserError(`Нет дня ${ref}. Дни: ${p.schedule.days.map(x => `${x.id} (${x.date || 'без даты'})`).join(', ') || 'нет'}`);
+  return d;
+}
+
+function prepSchedule(p, sm, bd) {
+  p.locations = Array.isArray(p.locations) ? p.locations : [];
+  for (const l of p.locations) {
+    l.sceneIds = Array.isArray(l.sceneIds) ? l.sceneIds : []; l.props = Array.isArray(l.props) ? l.props : []; l.geo = l.geo || ''; l.name = l.name || '';
+    // объект и подобъект — как в программе: старые локации делятся по первой точке
+    if (typeof l.object !== 'string') { const t = l.name.trim(), i = t.indexOf('.'); l.object = i < 0 ? t : t.slice(0, i).trim(); l.sub = i < 0 ? '' : t.slice(i + 1).replace(/^[\s.]+/, '').trim(); }
+    l.sub = typeof l.sub === 'string' ? l.sub : ''; l.base = l.base || ''; l.hint = l.hint || '';
+  }
+  bd.normalizeBreakdown(p, uid);
+  sm.normalizeSchedule(p, uid);
+  return p;
+}
+
+// Правила раскладки КПП: что учитывать, когда ИИ раскладывает сцены по дням.
+const SCHEDULE_RULES = `Правила раскладки КПП (календарно-постановочного плана):
+1. Сначала get_schedule: сцены, локации, актёры и их занятость, уже разложенное. Зафиксированные дни (locked) не трогай. Если человек не просил переделать текущую раскладку, начни новый вариант: edit_schedule {op:"new_variant", name:"…", copy:false} — прежний останется, человек сравнит. Дни не удаляй без просьбы.
+2. Спроси, если не знаешь: дату первой смены (start), рабочая неделя (5/2 или 6/1), длина смены (обычно 12 часов), ограничения площадок и актёров, которых нет в занятости. Если человек сказал «реши сам» — 5/2, 12 часов, и напиши это в отчёте.
+3. Главное — меньше переездов: сцены одного объекта (локации) снимаются подряд, в один день — одна площадка, самое большее две рядом. Порядок сюжета не важен.
+4. Нагрузка на смену: ориентир 4–5 страниц (32–40 восьмых) или 3–4 минуты экранного времени. Тяжелее считай сцены с трюками, спецэффектами, животными, детьми, большой массовкой, транспортом в кадре, сложным гримом — таких меньше в день.
+5. Режим и солнце: дневная натура — между восходом и закатом дня (sun в get_schedule); режимные сцены — на рассвет или закат, отдельной короткой точкой; ночные — в ночные смены (night:true). После ночной смены — отсыпной день (kind:"rest") или смена не раньше чем через 12 часов.
+6. Актёры: сцену с актёром нельзя ставить на дату, где он занят (busy kind "busy"); "part" — только с учётом заметки (например, после 12:00). Собирай сцены каждого актёра плотнее: меньше съёмочных дней и дней ожидания между ними.
+7. Внутри объекта: сначала натура (погода, свет), потом интерьер; внутри интерьера — по сценарным дням и костюмам, чтобы реже менять грим и костюм; сцены с разрушающим гримом (кровь, грязь, слёзы, мокрые волосы) — в конце дня.
+8. Массовку, игровой транспорт и животных собирай в как можно меньше дней.
+9. Добавляй плашки там, где нужно: «Обед», «Переезд на …», «Установка света», «Грим, костюм, техническое освоение».
+10. Выходные и праздники — нерабочие дни (kind:"off"), если человек не сказал иначе. Номер смены считается только по рабочим дням; даты — подряд от первого дня (start), выходные тоже занимают свою дату.
+11. Объект и подобъект: шапка «ИНТ. ДОМ БАТЫРА. ГОСТИНАЯ» — объект «Дом Батыра», подобъект «Гостиная». Переезд — это смена объекта, а не комнаты: комнаты одного дома в один день — нормально.
+12. Обед ставится ячейкой вызывного (edit_callsheet set.lunch), длина по умолчанию час — в план он встанет сам; плашку «Обед» в items добавлять не нужно.
+13. Запиши раскладку через edit_schedule (по дням, set_items или add_day с items) и отчитайся по-русски: дни с объектами и сценами, страницы и хронометраж, почему так, какие конфликты не удалось решить (занятость, солнце, перегруз).`;
+
+// Правила вызывного листа: как Мизансцена его заполняет и что ИИ стоит вписать сам.
+const CALLSHEET_RULES = `Правила вызывного листа:
+1. Сначала get_callsheet для дня: что уже вписано, что посчитано само. Зафиксированный день (locked) не меняй.
+2. Само считается, вписывать не нужно: план по времени (от начала смены, длина сцен по хронометражу), обед в плане по ячейке «Обед», готовность и конец смены актёров по плану, грим, костюм и машина — назад от готовности по минутам актёра (edit_crew op "actor": makeupMin, costumeMin, carMin), восход и закат по адресу объекта, погода по прогнозу (на ~16 дней вперёд), место сбора — адрес объекта первой сцены, время сбора — начало смены, цеха и транспорт — к началу смены.
+3. Вписывай то, чего программа не знает: сбор группы (meetTime обычно на 30–60 минут раньше начала смены, если нужны грим и костюм; meet — место, meetNote — как добраться), мотор (обычно через 1–1,5 часа после начала смены), стоп-мотор (не позже 12 часов от начала смены), обед (lunch — через 5–6 часов после начала смены, lunchEnd — только если не час).
+4. Объекты: адрес, база группы и парковка, примечание для группы — общие для объекта (edit_objects). Если у места нет адреса, спроси человека; не выдумывай адреса.
+5. Цеха и спецтранспорт: всем к началу смены, если человек не сказал иначе. Убирай ненужное в этой смене через needed:false (например, без генератора в интерьере с электричеством) — только если это очевидно из сцен или человек сказал.
+6. Похожие смены: сначала copy_from из предыдущей рабочей смены, потом поправь отличия.
+7. Ночная смена: начало вечером, стоп-мотор утром; после неё в КПП — отсыпной день.
+8. Блоки листа стоят на постоянных местах; убирать блок (blocks) — только по просьбе человека.
+9. В конце коротко отчитайся по-русски: что вписал, что посчитано само, что нужно уточнить у человека (адреса, базы, занятость актёров).`;
+
 // Правила разбора сцены по графам — так, как его делает Мизансцена. Их получает любой подключённый ИИ-помощник.
 const BREAKDOWN_RULES = `Правила разбора сцены по графам (как для КПП):
 1. Сначала прочитай текст сцены целиком (get_screenplay с номером сцены) и то, что уже записано (get_breakdown). Разбирай по тексту, ничего не придумывай. Если вывод не прямой, а догадка, допиши в конце «(?)».
@@ -496,7 +811,7 @@ const BREAKDOWN_RULES = `Правила разбора сцены по граф�
 const INSTRUCTIONS = 'Мизансцена: программа режиссёра (сценарий, разбор сцен по графам, режиссёрский сценарий, локации, Shot Designer — план сцены сверху с камерами, светом и персонажами, плюс 3D-вид). ' +
   'Начни с list_projects и get_project. Перед расстановкой объектов вызови get_reference. Правки сразу видны в открытой программе. ' +
   'Тексты сценария принадлежат автору: переписывай их, только если человек об этом просит. ' +
-  'Отвечай по-русски, сцены называй номерами.\n\n' + BREAKDOWN_RULES;
+  'Отвечай по-русски, сцены называй номерами.\n\n' + BREAKDOWN_RULES + '\n\n' + SCHEDULE_RULES + '\n\n' + CALLSHEET_RULES;
 
 // Готовые задания: в Claude Desktop они в меню «+», в Claude Code — команды /mcp__mizanscena__…
 const PROMPTS = [
@@ -511,6 +826,24 @@ const PROMPTS = [
     description: 'Подробный разбор каждой сцены сценария по графам, как для КПП.',
     arguments: [{ name: 'project', description: 'Название или id проекта', required: true }],
     text: a => `Сделай подробный разбор всех сцен проекта «${a.project}» в Мизансцене и запиши его в программу через edit_breakdown. Иди по сценам по порядку, записывай каждую сцену отдельным вызовом. Следи, чтобы одни и те же предметы и костюмы назывались одинаково во всех сценах.\n\n${BREAKDOWN_RULES}`,
+  },
+  {
+    name: 'schedule_plan', title: 'Разложить КПП',
+    description: 'Разложить сцены по съёмочным дням с учётом локаций, актёров и их занятости, режима и солнца, нагрузки на смену. Записывается новым вариантом, текущий остаётся.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }, { name: 'wishes', description: 'Пожелания: дата начала, неделя 5/2 или 6/1, что снять первым, ограничения', required: false }],
+    text: a => `Разложи КПП проекта «${a.project}» в Мизансцене по дням и запиши в программу новым вариантом раскладки.${a.wishes ? `\nПожелания: ${a.wishes}` : ''}\n\n${SCHEDULE_RULES}`,
+  },
+  {
+    name: 'schedule_check', title: 'Проверить КПП',
+    description: 'Проверить текущую раскладку: занятость актёров, переезды, перегруз смен, ночные смены без отсыпного, солнце.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }],
+    text: a => `Проверь текущую раскладку КПП проекта «${a.project}» в Мизансцене (get_schedule): найди конфликты занятости актёров, лишние переезды, перегруженные и полупустые смены, ночные смены без отсыпного, натуру после заката, разбросанные дни актёров. Ничего не меняй — перечисли проблемы по дням и предложи исправления; правь, только если человек попросит.\n\n${SCHEDULE_RULES}`,
+  },
+  {
+    name: 'callsheet_fill', title: 'Заполнить вызывные',
+    description: 'Заполнить вызывные листы смен: сбор группы, мотор, стоп-мотор, обед, адреса и базы объектов, минуты на грим и костюм актёров.',
+    arguments: [{ name: 'project', description: 'Название или id проекта', required: true }, { name: 'days', description: 'Какие смены: «все», «1–3» или даты', required: false }, { name: 'wishes', description: 'Что известно: начало смены, где сбор, адреса, кто сколько гримируется', required: false }],
+    text: a => `Заполни вызывные листы проекта «${a.project}» в Мизансцене${a.days ? ` (смены: ${a.days})` : ''}: get_schedule, потом по каждой рабочей смене get_callsheet и edit_callsheet, адреса и базы — edit_objects, минуты на грим и костюм — edit_crew.${a.wishes ? `\nЧто известно: ${a.wishes}` : ''}\n\n${CALLSHEET_RULES}`,
   },
   {
     name: 'breakdown_check', title: 'Проверить разбор',

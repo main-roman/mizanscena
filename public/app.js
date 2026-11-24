@@ -1,4 +1,5 @@
 // Точка входа: переходы между экранами, список проектов и страница проекта.
+import { shiftNo, DAY_KINDS } from './schedmodel.js';
 import { storage } from './storage.js';
 import { store, $, $$, esc, toast, pickFile, createProject, copyToCloud, exportProjectFile, importProjectFile, normalizeProject, coverOf } from './store.js';
 import { srcOf } from './storage.js';
@@ -9,13 +10,17 @@ import { mountPlan, unmountPlan, createPlan } from './plan.js';
 import { mountScript, unmountScript, showScene, scriptStats, printScript, toFountain, loadScriptInto, SCRIPT_FILES } from './script.js';
 import { renderLocations, mountLocation, sceneTitle } from './locations.js';
 import { renderScenes, mountScene } from './scenes.js';
+import { renderSchedule } from './schedule.js';
+import { mountCallsheet } from './callsheet.js';
+import { mountCrew } from './crew.js';
+import { exportKPP } from './kppexport.js';
 import './tilemenu.js';
 import { sceneInfo, eighthsText } from './breakdown.js';
 import { openScene, openLocation, openPlan, closeSplit, refreshSplit } from './split.js';
 import { mountDirector, unmountDirector, printDirector, csvDirector, totalSeconds, clock } from './director.js';
 import { download, safeName, replaceHash } from './store.js';
 
-const VIEWS = ['home', 'project', 'script', 'director', 'plan', 'plans', 'locations', 'location', 'scenes', 'scene'];
+const VIEWS = ['home', 'project', 'script', 'director', 'plan', 'plans', 'locations', 'location', 'scenes', 'scene', 'schedule', 'call', 'crew'];
 let current = '', lanUrls = [], dataDir = '', appVersion = '', mcpInfo = null;
 
 store.onStatus = (text, bad = false) => {
@@ -31,8 +36,10 @@ store.onRemote = (p, why) => {
 cloud.onAuth = () => { syncSession(); if (current === 'home') renderHome(); };
 
 // Пропуск в облако передаётся серверу программы, чтобы подключённый ИИ-помощник видел и облачные проекты.
-function syncSession() {
+// Страница без входа не стирает вход, сохранённый другим окном: сбрасывает его только «Выйти» (clear = true).
+function syncSession(clear = false) {
   if (storage.mode !== 'server') return;
+  if (!cloud.signedIn && !clear) return;
   fetch('/api/cloud-session', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(cloud.signedIn ? { session: cloud.session, user: cloud.user } : null) }).catch(() => {});
 }
@@ -99,6 +106,16 @@ async function route(remote = false) {
     show('scene', `Сцена ${t.n}`, base + '/scenes');
     mountScene(parts[3]);
     $('#view-scene').scrollTop = 0;
+  } else if (sub === 'crew') {
+    show('crew', 'Группа', base);
+    mountCrew();
+  } else if (sub === 'schedule') {
+    show('schedule', 'КПП', base);
+    renderSchedule();
+  } else if (sub === 'call' && p.schedule.days.some(d => d.id === parts[3])) {
+    const d = p.schedule.days.find(x => x.id === parts[3]);
+    show('call', d.kind === 'work' ? `Вызывной лист, смена ${shiftNo(p, d)}` : `Вызывной лист, ${DAY_KINDS[d.kind].toLowerCase()} день`, base + '/schedule');
+    mountCallsheet(parts[3]);
   } else if (sub === 'locations') {
     show('locations', 'Локации', base);
     renderLocations();
@@ -194,7 +211,7 @@ $('#view-home').addEventListener('click', async e => {
   if (e.target.closest('#h-folder')) { window.mizDesktop.openData(); return; }
   if (e.target.closest('#h-ai')) { showAI(); return; }
   if (e.target.closest('#c-login')) { if (await cloudLogin()) toast('Вы вошли: ' + cloud.user.name); return; }
-  if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); syncSession(); renderHome(); } return; }
+  if (e.target.closest('#c-logout')) { if (confirm('Выйти из облака на этом устройстве? Проекты в облаке останутся.')) { cloud.logout(); syncSession(true); renderHome(); } return; }
   if (e.target.closest('#c-new')) { try { location.hash = `#/p/${await createProject(null, true)}`; } catch (err) { toast(err.message); } return; }
   if (e.target.closest('#c-join')) {
     const code = (await ask('Приглашение в проект', { text: 'Вставьте сообщение с приглашением целиком или только код из него.', placeholder: 'Код приглашения', ok: 'Войти в проект' }) || '').match(/[\w-]{10,}/g);
@@ -298,6 +315,10 @@ function renderProject() {
         <span class="sect-d">${hasText ? `${plural(st.scenes, 'сцена', 'сцены', 'сцен')}, примерно ${plural(st.pages, 'страница', 'страницы', 'страниц')}` : 'Пока пусто. Напишите здесь или откройте файл Fountain или Final Draft'}</span></a>
       <a class="sect" href="${base}/scenes"><span class="sect-n">Сцены и разбор</span>
         <span class="sect-d">${st.scenes ? `${plural(st.scenes, 'сцена', 'сцены', 'сцен')}, ${eighthsText(sceneInfo(p).reduce((a, s) => a + s.eighths, 0))} стр.: персонажи, реквизит, костюм, транспорт и другие графы по каждой сцене` : 'Разбор сцен: персонажи, реквизит, костюм, транспорт и другие графы'}</span></a>
+      <a class="sect" href="${base}/schedule"><span class="sect-n">КПП и вызывные листы</span>
+        <span class="sect-d">${p.schedule.days.length ? `${(() => { const w = p.schedule.days.filter(d => d.kind === 'work').length, o = p.schedule.days.length - w; return plural(w, 'смена', 'смены', 'смен') + (o ? `, ${plural(o, 'нерабочий день', 'нерабочих дня', 'нерабочих дней')}` : ''); })()}${p.schedule.days[0].date ? `, с ${new Date(p.schedule.days[0].date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}` : ''}` : 'Съёмочные дни по сценам, рассвет и закат, занятость актёров, вызывные листы на каждый день'}</span></a>
+      <a class="sect" href="${base}/crew"><span class="sect-n">Группа</span>
+        <span class="sect-d">${(() => { const n = p.schedule.info.crew.filter(r => r.name).length, a = p.schedule.cast.filter(c => c.actor).length; return n || a ? `${a ? plural(a, 'актёр', 'актёра', 'актёров') : ''}${a && n ? ', ' : ''}${n ? plural(n, 'человек', 'человека', 'человек') + ' в группе' : ''}: контакты по цехам` : 'Актёры и съёмочная группа по цехам: должности, телефоны, почта'; })()}</span></a>
       <a class="sect" href="${base}/director"><span class="sect-n">Режиссёрский сценарий</span>
         <span class="sect-d">${p.shots.length ? plural(p.shots.length, 'кадр', 'кадра', 'кадров') + (sec ? `, хронометраж ${clock(sec)}` : '') : 'Таблица кадров по сценам: содержание, персонажи, реквизит, техника'}</span></a>
       <a class="sect sect-pics" href="${base}/plans"><span class="sect-n">Shot Designer</span>
@@ -323,6 +344,8 @@ function renderProject() {
         <button class="act" data-act="script-fountain">Сценарий, Fountain</button>
         <button class="act" data-act="dir-pdf">Режиссёрский сценарий, PDF</button>
         <button class="act" data-act="dir-csv">Режиссёрский сценарий, Excel</button>
+        <button class="act" data-act="kpp-pdf">КПП, PDF</button>
+        <button class="act" data-act="kpp-xlsx">КПП, Excel</button>
       </div>
       ${!isCloud(p.id) || cloud.role(p.id) === 'owner' ? '<div class="actions proj-danger"><button class="act danger" data-act="remove">Удалить проект</button></div>' : ''}
     </div>
@@ -385,6 +408,7 @@ $('#view-project').addEventListener('click', async e => {
   if (act === 'script-fountain') download(new Blob([toFountain(p)], { type: 'text/plain;charset=utf-8' }), safeName(p.name) + '.fountain');
   if (act === 'dir-pdf') printDirector(p);
   if (act === 'dir-csv') csvDirector(p);
+  if (act === 'kpp-pdf' || act === 'kpp-xlsx') exportKPP(p, act === 'kpp-pdf' ? 'pdf' : 'xlsx');
   if (act === 'invite-edit' || act === 'invite-view') return invite(p, act === 'invite-view' ? 'viewer' : 'editor');
   if (act === 'to-cloud') {
     const id = await moveToCloud(p.id);
@@ -432,6 +456,39 @@ document.addEventListener('click', e => {
 // фото, брошенное мимо зоны, не должно открываться вместо программы
 addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
 addEventListener('drop', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+
+// ---------- загрузка обновления (только в программе для компьютера) ----------
+// Программа сообщает, сколько скачано; здесь это видно карточкой в углу, а на значке в панели задач — полоской.
+
+const mb = n => (n / 1048576).toLocaleString('ru-RU', { maximumFractionDigits: n < 10485760 ? 1 : 0 });
+const secs = s => s >= 90 ? `${Math.round(s / 60)} мин` : `${Math.max(1, Math.round(s))} с`;
+function updateCard(d) {
+  let el = $('#upd');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'upd';
+    el.setAttribute('role', 'status');
+    el.innerHTML = '<b class="upd-t"></b><div class="upd-bar"><i></i></div><span class="upd-d"></span><button class="ico upd-x" aria-label="Скрыть" title="Скрыть: загрузка продолжится"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+    el.querySelector('.upd-x').onclick = () => el.classList.remove('on');
+    document.body.append(el);
+    requestAnimationFrame(() => el.classList.add('on'));
+  }
+  const t = $('.upd-t', el), bar = $('.upd-bar i', el), det = $('.upd-d', el);
+  el.classList.toggle('bad', d.stage === 'error');
+  if (d.stage === 'start') { el.dataset.version = d.version; t.textContent = `Загружается Мизансцена ${d.version}`; bar.style.width = '1%'; det.textContent = 'Начинаю загрузку…'; el.classList.add('on'); }
+  if (d.stage === 'progress') {
+    const left = d.speed > 0 ? (d.total - d.transferred) / d.speed : 0;
+    t.textContent = `Загружается Мизансцена ${el.dataset.version || ''}`.trim();
+    bar.style.width = Math.max(1, d.percent).toFixed(1) + '%';
+    det.textContent = `${Math.floor(d.percent)}% · ${mb(d.transferred)} из ${mb(d.total)} МБ${d.speed > 0 ? ` · ${mb(d.speed)} МБ/с, осталось ${secs(left)}` : ''}`;
+  }
+  if (d.stage === 'done') {
+    t.textContent = `Мизансцена ${d.version} загружена`; bar.style.width = '100%'; det.textContent = 'Перезапустите программу в открывшемся окне или просто закройте её позже.';
+    setTimeout(() => el.classList.remove('on'), 8000);
+  }
+  if (d.stage === 'error') { t.textContent = 'Обновление не скачалось'; det.textContent = d.message || ''; }
+}
+if (window.mizDesktop && window.mizDesktop.onUpdate) window.mizDesktop.onUpdate(updateCard);
 
 // ---------- запуск ----------
 

@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('mizDesktop', {
   openData: () => ipcRenderer.invoke('open-data'),
   // Вход через Яндекс ID в отдельном окошке. Возвращает токен Яндекса или null, если окно закрыли.
   yandexLogin: clientId => ipcRenderer.invoke('yandex-login', clientId),
+  // Ход загрузки обновления: { stage: 'start' | 'progress' | 'done' | 'error', percent, transferred, total, speed }.
+  onUpdate: cb => ipcRenderer.on('update-status', (_e, data) => cb(data)),
 });

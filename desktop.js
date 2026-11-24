@@ -73,11 +73,18 @@ function setupUpdates() {
     if (response !== 0) return;
     if (process.platform === 'darwin') { shell.openExternal(RELEASES); return; }
     win.setProgressBar(0.01);
-    autoUpdater.downloadUpdate().catch(err => { win.setProgressBar(-1); dialog.showErrorBox('Обновление не скачалось', String(err.message || err)); });
+    tell({ stage: 'start', version: info.version });
+    autoUpdater.downloadUpdate().catch(err => { win.setProgressBar(-1); tell({ stage: 'error', message: String(err.message || err) }); dialog.showErrorBox('Обновление не скачалось', String(err.message || err)); });
   });
-  autoUpdater.on('download-progress', p => win && win.setProgressBar(Math.max(0.01, p.percent / 100)));
+  // ход загрузки: полоска на значке в панели задач и карточка внутри программы
+  const tell = data => { if (win && !win.isDestroyed()) win.webContents.send('update-status', data); };
+  autoUpdater.on('download-progress', p => {
+    if (win) win.setProgressBar(Math.max(0.01, p.percent / 100));
+    tell({ stage: 'progress', percent: p.percent, transferred: p.transferred, total: p.total, speed: p.bytesPerSecond });
+  });
   autoUpdater.on('update-downloaded', async info => {
     if (win) win.setProgressBar(-1);
+    tell({ stage: 'done', version: info.version });
     const { response } = await dialog.showMessageBox(win, {
       type: 'info', title: 'Обновление готово', buttons: ['Перезапустить сейчас', 'Когда закрою программу'], defaultId: 0, cancelId: 1,
       message: `Мизансцена ${info.version} загружена.`, detail: 'Все правки уже сохранены, перезапуск их не потеряет.',
@@ -99,7 +106,11 @@ ipcMain.handle('save-pdf', async (e, name) => {
     title: 'Сохранить PDF', defaultPath: path.join(app.getPath('documents'), safe + '.pdf'), filters: [{ name: 'PDF', extensions: ['pdf'] }],
   });
   if (canceled || !filePath) return null;
-  const data = await wc.printToPDF({ printBackground: true, preferCSSPageSize: true });
+  // поля листа печатаются цветом окна: на время печати он белый, иначе вокруг страниц тёмная рамка
+  if (owner) owner.setBackgroundColor('#ffffff');
+  let data;
+  try { data = await wc.printToPDF({ printBackground: true, preferCSSPageSize: true }); }
+  finally { if (owner) owner.setBackgroundColor('#141F24'); }
   fs.writeFileSync(filePath, data);
   shell.openPath(filePath);
   return filePath;

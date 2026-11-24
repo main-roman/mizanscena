@@ -3,7 +3,7 @@
 import { store, $, $$, uid, esc, toast, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, shotAuto, SIZES, MOVES } from './store.js';
 import { planSVG, caption, atPhase } from './shapes.js';
 import { makeXlsx } from './xlsx.js';
-import { CATS, sceneInfo, sceneItems, summaryLine, syncShotProps, catOf, cycleCat, splitItems } from './breakdown.js';
+import { CATS, sceneInfo, sceneItems, syncShotProps, catOf, cycleCat, splitItems } from './breakdown.js';
 import { srcOf } from './storage.js';
 
 const HEAD = ['№', 'Примечания', 'Режим, хронометраж', 'Раскадровка', 'План', 'Содержание', 'Персонажи', 'Реквизит, грим, костюм', 'Операторская техника, звук'];
@@ -118,9 +118,8 @@ function render() {
     </tr>`;
   };
   const body = gs.map(g => `<tbody data-scene="${g.id}">
-      <tr class="ds-scene"><th colspan="9"><span>${g.id ? `<button class="linkbtn ds-scene-open" data-scene-open="${g.id}" title="Открыть текст сцены рядом">${esc(g.title)}</button>` : esc(g.title)}</span>
-        ${g.id ? `<a class="act" href="#/p/${p.id}/scene/${g.id}" title="Страница сцены: разбор, локация, планы">Разбор сцены</a>` : ''}<button class="act" data-act="add">Добавить кадр</button>
-        ${g.id ? bdLine(bd.get(g.id), p, g.id) : ''}</th></tr>
+      <tr class="ds-scene"><th colspan="9"><span>${g.id ? `<button class="linkbtn ds-scene-open" data-scene-open="${g.id}" title="Открыть разбор сцены рядом">${esc(g.title)}</button>` : esc(g.title)}</span>
+        <button class="act" data-act="add">Добавить кадр</button></th></tr>
       ${g.shots.map((s, i) => row(s, i, g)).join('')}
     </tbody>`).join('');
   const hint = scenes.length ? '' : `<p class="empty ds-hint">Сцены появятся здесь сами, когда в сценарии будут строки «Время и место». Кадры можно добавлять уже сейчас.</p>`;
@@ -129,14 +128,6 @@ function render() {
   scroll.scrollTop = top;
   $$('textarea.auto', root).forEach(grow);
   summary();
-}
-
-// разбор сцены под её заголовком: графы цветными метками, локации ссылками
-function bdLine(items, p, sid) {
-  const locs = p.locations.filter(l => l.sceneIds.includes(sid));
-  const parts = Object.entries(items).filter(([, v]) => v.length).map(([c, v]) => `<span class="ds-bd-cat cat-${c}"><b>${CATS[c]}</b> ${v.map(esc).join(', ')}</span>`);
-  if (locs.length) parts.unshift(`<span class="ds-bd-cat"><b>Локация</b> ${locs.map(l => `<button class="linkbtn" data-loc-open="${l.id}">${esc(l.name)}</button>`).join(', ')}</span>`);
-  return parts.length ? `<div class="ds-bd">${parts.join('')}</div>` : '';
 }
 
 function grow(t) {
@@ -245,9 +236,7 @@ export function printDirector(p) {
   if (!p.shots.length) return toast('В режиссёрском сценарии пока нет кадров');
   const nums = numbering(p);
   const date = new Date().toLocaleDateString('ru-RU');
-  const info = sceneInfo(p);
-  const line = id => { const t = id ? summaryLine(sceneItems(p, id, info)) : ''; return t ? `<tr class="pr-bd"><td colspan="9">${esc(t)}</td></tr>` : ''; };
-  const body = groups(p).filter(g => g.shots.length).map(g => `<tr class="pr-scene"><th colspan="9">${esc(g.title)}</th></tr>${line(g.id)}` + g.shots.map(s => {
+  const body = groups(p).filter(g => g.shots.length).map(g => `<tr class="pr-scene"><th colspan="9">${esc(g.title)}</th></tr>` + g.shots.map(s => {
     const c = cells(p, s, nums), a = shotAuto(p, s);
     const td = v => `<td>${esc(v).replace(/\n/g, '<br>')}</td>`;
     return `<tr>${td(c[0])}${td(c[1])}${td(c[2])}<td class="pr-pic">${s.frame ? `<img src="${esc(srcOf(s.frame))}">` : ''}</td>
@@ -269,8 +258,6 @@ export function csvDirector(p) {
   ];
   for (const g of gs) {
     rows.push({ cells: [g.title], style: 4, height: 22, merge: true });
-    const t = g.id ? summaryLine(sceneItems(p, g.id)) : '';
-    if (t) rows.push({ cells: [t], style: 2, height: Math.min(120, 15 * Math.ceil(t.length / 150) + 6), merge: true });
     for (const s of g.shots) {
       const c = cells(p, s, nums), a = shotAuto(p, s);
       const cam = a.plan ? [a.plan.name, a.camera ? `Камера ${a.camera.name}, ${a.camera.lens} мм` : ''].filter(Boolean).join('\n') : '';

@@ -44,17 +44,21 @@ export const cleanName = t => String(t || '').replace(/\(.*?\)/g, '')
   .replace(/(^|\s)(V\.?O\.?|O\.?S\.?|CONT'?D|Г\.?\s?З\.?\s?К\.?|З\.?\s?К\.?|ПРОД\.?)(?=\s|$)/giu, ' ')
   .replace(/[.:]+$/, '').replace(/\s+/g, ' ').trim().toUpperCase();
 
+// служебные строки, которые в сценарии иногда стоят как «Персонаж»: акты, титры, затемнения
+const NOT_CHAR = /^(АКТ|ЧАСТЬ|ГЛАВА|ЭПИЗОД|СЕРИЯ|ПРОЛОГ|ЭПИЛОГ|ТИТР|ТИТРЫ|ЗТМ|ИЗ ЗТМ|ЗАТЕМНЕНИЕ|НАПЛЫВ|СТОП-КАДР|КОНЕЦ|ПРОДОЛЖЕНИЕ|FADE|CUT|ACT|THE END|INTERCUT)(\s|$|\d)/u;
+const isChar = n => n.length > 1 && !NOT_CHAR.test(n);
+
 // Все сцены с разбором шапки, длиной и персонажами.
 export function sceneInfo(p) {
   const blocks = p.script.blocks, out = [];
-  const known = new Set(blocks.filter(b => b.type === 'character').map(b => cleanName(b.text)).filter(n => n.length > 1));
+  const known = new Set(blocks.filter(b => b.type === 'character').map(b => cleanName(b.text)).filter(isChar));
   let cur = null;
   for (const b of blocks) {
     if (b.type === 'scene') { cur = { id: b.id, n: out.length + 1, text: b.text, ...parseHeading(b.text), lines: 0, blocks: [], speaking: new Set(), seen: new Set() }; out.push(cur); }
     if (!cur) continue;
     cur.lines += linesOf(b);
     if (b.type !== 'scene') cur.blocks.push(b);
-    if (b.type === 'character') { const n = cleanName(b.text); if (n) cur.speaking.add(n); }
+    if (b.type === 'character') { const n = cleanName(b.text); if (isChar(n)) cur.speaking.add(n); }
   }
   for (const s of out) {
     // молчащие персонажи: имя из списка говорящих встречается в действии
@@ -62,6 +66,10 @@ export function sceneInfo(p) {
     for (const n of known) if (!s.speaking.has(n) && new RegExp(`(^|[^А-ЯЁA-Z])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u').test(text)) s.seen.add(n);
     s.eighths = Math.max(1, Math.round(s.lines / 58 * 8));
     s.chars = [...s.speaking, ...s.seen];
+    // свой хронометраж, вписанный в разборе или в КПП, важнее того, что в скобках в шапке
+    const own = p.schedule && p.schedule.scenes && p.schedule.scenes[s.id] && p.schedule.scenes[s.id].dur;
+    s.durScript = s.dur;
+    if (own) { s.dur = own; s.durOwn = true; }
   }
   return out;
 }
@@ -274,7 +282,10 @@ export function locationFromScene(p, sceneId, uid) {
   if (!s) return null;
   const key = t => String(t || '').toUpperCase().replace(/\s+/g, ' ').trim();
   const same = info.filter(x => x.id === sceneId || (s.place && key(x.place) === key(s.place) && !(p.locations || []).some(l => l.sceneIds.includes(x.id))));
-  const l = { id: 'loc-' + uid(), name: placeName(p, s.place || s.text), geo: '', note: '', photos: [], sceneIds: same.map(x => x.id), props: [] };
+  const full = placeName(p, s.place || s.text), dot = full.indexOf('.');
+  const object = dot < 0 ? full : full.slice(0, dot).trim(), sub = dot < 0 ? '' : full.slice(dot + 1).replace(/^[\s.]+/, '').trim();
+  const known = (p.locations || []).find(x => String(x.object || '').toUpperCase() === object.toUpperCase() && x.geo);
+  const l = { id: 'loc-' + uid(), object, sub, name: [object, sub].filter(Boolean).join('. '), geo: known ? known.geo : '', base: '', note: '', photos: [], sceneIds: same.map(x => x.id), props: [] };
   for (const x of same) {
     for (const it of (p.breakdown || []).filter(i => i.sceneId === x.id && !i.off && ['props', 'sfx', 'animals'].includes(i.cat))) {
       if (!l.props.some(q => q.sceneId === x.id && q.text.toLowerCase() === it.text.toLowerCase())) l.props.push({ id: uid(), text: it.text, sceneId: x.id, ready: false });
@@ -284,4 +295,16 @@ export function locationFromScene(p, sceneId, uid) {
   for (const pl of p.plans) if (!pl.locationId && l.sceneIds.includes(pl.sceneId)) pl.locationId = l.id;
   p.locations.push(l);
   return l;
+}
+
+// Хронометраж, как его вписал человек: «1:10», «70» (секунды), «1 мин 10 с» -> «01:10». Пусто или непонятно -> ''.
+export function normDur(t) {
+  const v = String(t || '').trim().toLowerCase();
+  if (!v) return '';
+  let m = v.match(/^(\d{1,3}):(\d{1,2})$/);
+  let sec = m ? +m[1] * 60 + +m[2] : null;
+  if (sec === null) { const mm = v.match(/(\d+)\s*м/), ss = v.match(/(\d+)\s*с/); if (mm || ss) sec = (mm ? +mm[1] * 60 : 0) + (ss ? +ss[1] : 0); }
+  if (sec === null && /^\d+$/.test(v)) sec = +v;
+  if (sec === null || !(sec >= 0)) return '';
+  return `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
 }

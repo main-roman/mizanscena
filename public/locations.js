@@ -1,6 +1,6 @@
 // Локации: карточки с фотографиями, адресом, сценами сценария, планами и постановочным реквизитом.
 // Фото можно бросить прямо на карточку; программа уменьшает их сама.
-import { store, $, $$, uid, esc, toast, replaceHash, download, safeName, storeImage, pickFile, scenesOf, numbering, normalizeLocation } from './store.js';
+import { store, $, $$, uid, esc, toast, replaceHash, download, safeName, storeImage, pickFile, scenesOf, numbering, normalizeLocation, objectsOf, objKey, setObjectGeo, setObjectBase, locName } from './store.js';
 import { srcOf } from './storage.js';
 import { planSVG } from './shapes.js';
 import { createPlan } from './plan.js';
@@ -25,7 +25,10 @@ export function sceneTitle(p, id) {
 }
 
 export function newLocation(data = {}) {
-  const l = normalizeLocation({ name: `Локация ${project().locations.length + 1}`, ...data });
+  const l = normalizeLocation({ object: `Объект ${objectsOf(project()).length + 1}`, sub: '', ...data });
+  // у подобъекта известного объекта адрес уже есть
+  const same = project().locations.find(x => objKey(x.object) === objKey(l.object) && x.geo);
+  if (same && !l.geo) l.geo = same.geo;
   project().locations.push(l);
   store.touch();
   return l;
@@ -58,25 +61,30 @@ function rerender() {
 
 export function renderLocations() {
   const p = project(), base = `#/p/${p.id}`;
-  const tiles = p.locations.map(l => {
+  const tile = l => {
     const sc = l.sceneIds.map(id => sceneTitle(p, id)).filter(Boolean);
     const cover = l.photos[0];
     return `<a class="loc-tile" href="${base}/loc/${l.id}" data-loc="${l.id}">
       <span class="thumb loc-thumb">${cover ? `<img src="${esc(srcOf(cover.src))}" alt="" loading="lazy">` : '<span class="thumb-empty">Перетащите сюда фото</span>'}</span>
-      <span class="tile-name">${esc(l.name)}</span>
+      <span class="tile-name">${esc(l.sub || l.object)}</span>
       <span class="tile-meta">${[sc.length ? 'Сцены ' + sc.map(s => s.n).join(', ') : 'Сцены не выбраны', l.photos.length ? plural(l.photos.length, 'фото', 'фото', 'фото') : ''].filter(Boolean).join(' · ')}</span>
-      ${l.geo ? `<span class="tile-meta loc-geo-line">${esc(l.geo.replace(/^https?:\/\//, ''))}</span>` : ''}
     </a>`;
-  }).join('');
+  };
+  const geoText = g => !g ? '<i>адрес не указан</i>' : /^https?:\/\//i.test(g.trim()) ? `<a href="${esc(g)}" target="_blank" rel="noopener">метка на карте</a>` : esc(g);
+  const objects = objectsOf(p).map(o => `<section class="lo-obj">
+      <header class="lo-head"><h2>${esc(o.name)}</h2><span class="lo-geo">${geoText(o.geo)}${o.base ? ` · база: ${esc(o.base)}` : ''}</span><span class="grow"></span>
+        <button class="linkbtn" data-act="new-sub" data-object="${esc(o.name)}">+ подобъект</button></header>
+      <div class="loc-grid">${o.locs.map(tile).join('')}</div></section>`).join('');
   $('#view-locations').innerHTML = `<div class="page">
-    <header class="page-head"><h1>Локации</h1><button class="act main" data-act="new-loc">Новая локация</button></header>
-    <p class="page-hint">Фотографии можно перетащить прямо на карточку локации: программа сама их уменьшит. Перетащите на «Новую локацию», и она создастся вместе с фото. Правая кнопка мыши по карточке: удалить локацию.</p>
-    <div class="loc-grid">${tiles}
-      <button class="loc-tile loc-new" data-act="new-loc" data-loc="new"><span class="thumb">${PLUS}</span><span class="tile-name">Новая локация</span></button>
-    </div></div>`;
+    <header class="page-head"><h1>Локации</h1><button class="act main" data-act="new-loc">Новый объект</button></header>
+    <p class="page-hint">Локации собраны по объектам: у объекта (дом, стадион) один адрес, внутри — подобъекты (гостиная, кухня). Фотографии можно перетащить прямо на карточку: программа сама их уменьшит. Правая кнопка мыши по карточке: удалить.</p>
+    ${objects}
+    <div class="loc-grid lo-newrow"><button class="loc-tile loc-new" data-act="new-loc" data-loc="new"><span class="thumb">${PLUS}</span><span class="tile-name">Новый объект</span></button></div></div>`;
 }
 
 $('#view-locations').addEventListener('click', e => {
+  const ns = e.target.closest('[data-act="new-sub"]');
+  if (ns) { const l = newLocation({ object: ns.dataset.object, sub: 'Новый подобъект' }); location.hash = `#/p/${project().id}/loc/${l.id}`; return; }
   if (!e.target.closest('[data-act="new-loc"]')) return;
   const l = newLocation();
   location.hash = `#/p/${project().id}/loc/${l.id}`;
@@ -117,6 +125,8 @@ export function renderLocation(id) {
   const p = project(), l = locOf(id), base = `#/p/${p.id}`;
   if (!l) return;
   const scenes = scenesOf(p), nums = numbering(p);
+  const obj = objectsOf(p).find(o => o.key === objKey(l.object)) || {};
+  const ogeo = obj.geo || l.geo, obase = obj.base || l.base; // адрес и база группы — общие для объекта
   const linked = l.sceneIds.map(sid => ({ id: sid, t: sceneTitle(p, sid) })).filter(x => x.t);
   const free = scenes.map((s, i) => ({ s, i })).filter(({ s }) => !l.sceneIds.includes(s.id));
   // похоже по названию: сцены, в заголовке которых встречается название локации
@@ -168,11 +178,17 @@ export function renderLocation(id) {
 
   $('#view-location').innerHTML = `<div class="loc">
     <div class="loc-main">
-      <input class="proj-name" data-key="name" value="${esc(l.name)}" aria-label="Название локации" spellcheck="false">
-      <div class="loc-geo">
-        <input type="text" data-key="geo" value="${esc(l.geo)}" placeholder="Адрес или ссылка на карту" aria-label="Адрес или ссылка на карту">
-        <a class="act${l.geo ? '' : ' off'}" id="loc-map" href="${l.geo ? esc(mapUrl(l.geo)) : '#'}" target="_blank" rel="noopener">На карте</a>
+      <div class="lo-names">
+        <label><span>Объект</span><input class="proj-name" data-key="object" list="lo-objects" value="${esc(l.object)}" placeholder="Дом, стадион, улица" aria-label="Объект" spellcheck="false"></label>
+        <label><span>Подобъект</span><input class="proj-name lo-sub" data-key="sub" value="${esc(l.sub)}" placeholder="Гостиная, кухня — или пусто, если весь объект" aria-label="Подобъект" spellcheck="false"></label>
+        <datalist id="lo-objects">${objectsOf(p).filter(o => objKey(o.name) !== objKey(l.object)).map(o => `<option value="${esc(o.name)}">`).join('')}</datalist>
       </div>
+      <div class="loc-geo">
+        <input type="text" data-key="geo" value="${esc(ogeo)}" placeholder="Адрес объекта или ссылка на карту" aria-label="Адрес объекта или ссылка на карту">
+        <a class="act${ogeo ? '' : ' off'}" id="loc-map" href="${ogeo ? esc(mapUrl(ogeo)) : '#'}" target="_blank" rel="noopener">На карте</a>
+      </div>
+      ${(() => { const n = p.locations.filter(x => x !== l && objKey(x.object) === objKey(l.object)).length; return n ? `<p class="page-hint lo-shared">Адрес и база группы общие для всего объекта «${esc(l.object)}»: ещё ${plural(n, 'подобъект', 'подобъекта', 'подобъектов')}.</p>` : ''; })()}
+      <div class="loc-geo lo-base"><input type="text" data-key="base" value="${esc(obase)}" placeholder="База группы, парковка: где встают машины, грим, кейтеринг — общая для объекта" aria-label="База группы, парковка"></div>
 
       <section class="loc-sec">
         <header class="loc-sec-head"><h2>Фотографии${l.photos.length ? ` <span>${l.photos.length}</span>` : ''}</h2>
@@ -217,8 +233,9 @@ view.addEventListener('input', e => {
   const key = e.target.dataset.key, li = e.target.closest('[data-prop]');
   if (key) {
     l[key] = e.target.value;
-    if (key === 'name') $('#crumb').textContent = l.name || 'Локация';
-    if (key === 'geo') { const a = $('#loc-map'); a.href = l.geo ? mapUrl(l.geo.trim()) : '#'; a.classList.toggle('off', !l.geo.trim()); }
+    if (key === 'object' || key === 'sub') { l.name = locName(l); $('#crumb').textContent = l.name; }
+    if (key === 'base') setObjectBase(project(), l, l.base);
+    if (key === 'geo') { setObjectGeo(project(), l, l.geo); const a = $('#loc-map'); a.href = l.geo ? mapUrl(l.geo.trim()) : '#'; a.classList.toggle('off', !l.geo.trim()); }
     store.touch();
   } else if (li && e.target.dataset.k === 'text') {
     const x = l.props.find(q => q.id === li.dataset.prop);
@@ -228,7 +245,12 @@ view.addEventListener('input', e => {
 view.addEventListener('change', e => {
   const l = locOf(openId);
   if (!l) return;
-  if (e.target.dataset.key === 'name') { l.name = l.name.trim() || 'Локация'; $('#crumb').textContent = l.name; store.touch(); renderLocation(l.id); } // подсказки сцен зависят от названия
+  if (e.target.dataset.key === 'object' || e.target.dataset.key === 'sub') {
+    l.object = l.object.trim(); l.sub = l.sub.trim(); l.name = locName(l);
+    // перешли в известный объект — берём его адрес
+    if (e.target.dataset.key === 'object') { const same = project().locations.find(x => x !== l && objKey(x.object) === objKey(l.object) && x.geo); if (same) l.geo = same.geo; const sb = project().locations.find(x => x !== l && objKey(x.object) === objKey(l.object) && x.base); if (sb) l.base = sb.base; }
+    $('#crumb').textContent = l.name; store.touch(); renderLocation(l.id); // подсказки сцен зависят от названия
+  }
   if (e.target.dataset.k === 'ready') {
     const li = e.target.closest('[data-prop]'), x = l.props.find(q => q.id === li.dataset.prop);
     if (x) { x.ready = e.target.checked; li.classList.toggle('ready', x.ready); store.touch(); }
@@ -254,7 +276,7 @@ view.addEventListener('keydown', e => {
     $(`.props-group[data-scene="${sid}"] .props-add`, view).focus();
   } else if (e.target.dataset.k === 'text') {
     e.target.closest('.props-group').querySelector('.props-add').focus();
-  } else if (e.target.dataset.key === 'name' || e.target.dataset.key === 'geo') e.target.blur();
+  } else if (['object', 'sub', 'geo', 'base'].includes(e.target.dataset.key)) e.target.blur();
 });
 view.addEventListener('click', async e => {
   const l = locOf(openId);

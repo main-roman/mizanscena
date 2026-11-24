@@ -3,6 +3,7 @@ import { storage, blobToData, srcOf } from './storage.js';
 import { cloud, isCloud, merge } from './cloud.js';
 import { FURN, LIGHTS, esc } from './shapes.js';
 import { normalizeBreakdown } from './breakdown.js';
+import { normalizeSchedule } from './schedmodel.js';
 
 export const $ = (s, r = document) => r.querySelector(s);
 export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -54,14 +55,52 @@ export function normalizeProject(p) {
   p.locations = Array.isArray(p.locations) ? p.locations : [];
   for (const l of p.locations) normalizeLocation(l);
   normalizeBreakdown(p, uid);
+  normalizeSchedule(p, uid);
   return p;
 }
 
 // Локация: фото, адрес или ссылка на карту, сцены сценария и постановочный реквизит (общий и по сценам).
+// Локация = объект (дом, стадион; у объекта один адрес) и подобъект (гостиная, кухня).
+// Полное название «Объект. Подобъект» хранится и в name — им пользуются остальные разделы.
+// Старые локации делятся по первой точке: «Дом Батыра. Гостиная» -> «Дом Батыра» + «Гостиная».
+export function splitPlace(text) {
+  const t = String(text || '').trim(), i = t.indexOf('.');
+  if (i < 0) return { object: t, sub: '' };
+  return { object: t.slice(0, i).trim(), sub: t.slice(i + 1).replace(/^[\s.]+/, '').trim() };
+}
+export const locName = l => [l.object, l.sub].filter(Boolean).join('. ') || 'Новая локация';
+export const objKey = name => String(name || '').toUpperCase().replace(/Ё/g, 'Е').replace(/\s+/g, ' ').trim();
+// адрес у всех подобъектов одного объекта общий
+export function setObjectGeo(p, l, geo) {
+  for (const x of p.locations) if (objKey(x.object) === objKey(l.object)) x.geo = geo;
+}
+// база группы, парковка и примечание для группы — тоже одни на объект
+export function setObjectField(p, l, key, value) {
+  for (const x of p.locations) if (objKey(x.object) === objKey(l.object)) x[key] = value;
+}
+export const setObjectBase = (p, l, base) => setObjectField(p, l, 'base', base);
+// объекты проекта: [{ key, name, geo, base, locs }] в порядке первого появления
+export function objectsOf(p) {
+  const map = new Map();
+  for (const l of p.locations) {
+    const k = objKey(l.object);
+    if (!map.has(k)) map.set(k, { key: k, name: l.object || 'Без объекта', geo: '', locs: [] });
+    const o = map.get(k);
+    o.locs.push(l);
+    if (!o.geo && l.geo) o.geo = l.geo;
+    if (!o.base && l.base) o.base = l.base;
+  }
+  return [...map.values()];
+}
+
 export function normalizeLocation(l) {
   l.id = l.id || 'loc-' + uid();
-  l.name = l.name || 'Новая локация';
+  if (typeof l.object !== 'string') { const s = splitPlace(l.name || 'Новая локация'); l.object = s.object; l.sub = s.sub; }
+  l.sub = typeof l.sub === 'string' ? l.sub : '';
+  l.name = locName(l);
   l.geo = l.geo || '';
+  l.base = l.base || ''; // база группы, парковка — общая для объекта
+  l.hint = l.hint || ''; // примечание для группы в вызывном: вход, ключи, тишина — общее для объекта
   l.note = l.note || '';
   l.photos = Array.isArray(l.photos) ? l.photos.filter(x => x && x.src) : [];
   for (const ph of l.photos) { ph.id = ph.id || uid(); ph.name = ph.name || ''; }
