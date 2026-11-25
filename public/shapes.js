@@ -101,10 +101,13 @@ export const LOOKS = {
 export const POSES = { stand: 'Стоит', sit: 'Сидит' };
 
 // План с расстановкой персонажей и камер из указанной фазы (для миниатюр и печати).
+// Камеру или персонажа можно убрать только в некоторых фазах: o.absent — список таких фаз.
+export const absentIn = (o, phaseId) => !!phaseId && Array.isArray(o.absent) && o.absent.includes(phaseId);
 export function atPhase(plan, phaseId) {
-  const ph = (plan.phases || []).find(p => p.id === phaseId);
+  const phs = plan.phases || [], ph = phs.find(p => p.id === phaseId) || (!phaseId && phs[plan.phase | 0]) || null;
   if (!ph) return plan;
-  return { ...plan, objects: plan.objects.map(o => (ph.pos[o.id] ? { ...o, ...ph.pos[o.id] } : o)) };
+  const gone = new Set(plan.objects.filter(o => absentIn(o, ph.id)).map(o => o.id));
+  return { ...plan, objects: plan.objects.filter(o => !gone.has(o.id) && !(o.type === 'path' && gone.has(o.ownerId))).map(o => (ph.pos[o.id] && (o.type !== 'furniture' || o.phased) ? { ...o, ...ph.pos[o.id] } : o)) };
 }
 
 export const FURN_CATS = { furn: 'Мебель', room: 'Интерьер', ext: 'Натура', gear: 'Техника' };
@@ -176,7 +179,10 @@ function text(x, y, str, size, attrs = '') {
 const label = (x, y, str) => str ? text(x, y, str, 0.2,
   `text-anchor="middle" fill="${INK}" stroke="${PAPER}" stroke-width="5" paint-order="stroke" stroke-linejoin="round" pointer-events="none"`) : '';
 
+// cone: false — луч камеры и света не рисуется (в редакторе он виден только у выбранного предмета)
+let NOCONE = false;
 function cone(id, x0, angle, len, color, opacity) {
+  if (NOCONE) return '';
   const a = angle * Math.PI / 360;
   const x = n(x0 + len * Math.cos(a)), y = n(len * Math.sin(a));
   return `<defs><radialGradient id="cg-${id}" gradientUnits="userSpaceOnUse" cx="${x0}" cy="0" r="${len}">
@@ -243,12 +249,13 @@ function body(o, icon = false) {
     }
     case 'camera': {
       const letter = (o.name || '').trim().charAt(0).toUpperCase();
-      return `${icon ? '' : cone(o.id, 0.38, fov(o), 5, CAM, 0.3)}
+      return `${icon ? '' : cone(o.id, 0.38, fov(o), 2.4, CAM, 0.22)}
         <rect x="-0.34" y="-0.18" width="0.5" height="0.36" rx="0.05" fill="${CAM}" stroke="${INK}" stroke-width="${S}"/>
         <path d="M0.16 -0.09 L0.38 -0.16 L0.38 0.16 L0.16 0.09 Z" fill="${CAM}" stroke="${INK}" stroke-width="${S}" stroke-linejoin="round"/>
         <g transform="translate(-0.09 0) rotate(${-(o.rot || 0)})" pointer-events="none">${text(0, 0.07, letter, 0.2, 'text-anchor="middle" font-weight="700" fill="#fff"')}</g>`;
     }
-    case 'light': return light(o, icon);
+    // прибор света — с тёплым ореолом, чтобы на плане он сразу отличался от чёрных стен и мебели
+    case 'light': return `${icon || (LIGHTS[o.kind] || {}).shape === 'sun' ? '' : `<circle r="${n(Math.max(0.3, (o.w || (LIGHTS[o.kind] || {}).w || 0) / 2 + 0.12))}" fill="#FFC83D" fill-opacity="0.28" stroke="#E8A300" stroke-width="${S * 0.8}" stroke-dasharray="0.06 0.04" pointer-events="none"/>`}${light(o, icon)}`;
     case 'furniture': return furniture(o);
     case 'door': {
       const w = o.w;
@@ -299,7 +306,12 @@ export function caption(o) {
 }
 
 // Один объект плана как SVG-разметка.
-export function drawObject(o, { scene, fresh } = {}) {
+export function drawObject(o, opts = {}) {
+  const was = NOCONE;
+  NOCONE = opts.cone === false;
+  try { return drawOne(o, opts); } finally { NOCONE = was; }
+}
+function drawOne(o, { scene, fresh } = {}) {
   if (o.type === 'wall') {
     const t = o.thickness || 0.15;
     return `<g data-id="${o.id}"><line x1="${o.x1}" y1="${o.y1}" x2="${o.x2}" y2="${o.y2}" stroke="transparent" stroke-width="${Math.max(0.4, t)}"/>
@@ -318,7 +330,7 @@ export function drawObject(o, { scene, fresh } = {}) {
       `fill="${INK}" stroke="${PAPER}" stroke-width="5" paint-order="stroke" stroke-linejoin="round" font-weight="600"`)).join('') + '</g>';
   }
   const locked = o.type === 'image' && o.locked ? ' pointer-events="none"' : '';
-  const g = `<g data-id="${o.id}" transform="translate(${n(o.x)} ${n(o.y)}) rotate(${n(o.rot || 0)})"${locked}${o.off ? ' opacity="0.4"' : ''}><g${fresh ? ' class="pop"' : ''}>${body(o)}</g></g>`;
+  const g = `<g data-id="${o.id}" transform="translate(${n(o.x)} ${n(o.y)}) rotate(${n(o.rot || 0)})"${locked}${o.off ? ' opacity="0.4"' : ''}><g${fresh ? ' class="pop-in"' : ''}>${body(o)}</g></g>`;
   return g + label(o.x, o.y + extent(o) + 0.3, caption(o));
 }
 

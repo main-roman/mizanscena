@@ -1,6 +1,6 @@
 {
   "name": "mizanscena",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Мизансцена: сценарий, режиссёрский сценарий и Shot Designer в одной программе.",
   "main": "desktop.js",
   "scripts": {

@@ -16,7 +16,9 @@ let quietUntil = 0;
 addEventListener('click', e => { if (performance.now() < quietUntil) { e.stopPropagation(); e.preventDefault(); } }, true);      // на сколько сдвинуть мышь, чтобы это стало перетаскиванием, а не щелчком
 
 export function pointerDrag(root, opt) {
-  const scroller = opt.scroller || root;
+  // что прокручивать: элемент или функция, которая его вернёт (если он пересоздаётся)
+  const scrollerOf = () => (typeof opt.scroller === 'function' ? opt.scroller() : opt.scroller) || root;
+  let scroller = scrollerOf();
   let cur = null; // { data, el, ghost, dx, dy, x, y, started, sx, sy, raf }
 
   const place = () => {
@@ -37,10 +39,11 @@ export function pointerDrag(root, opt) {
   const begin = () => {
     const r = cur.el.getBoundingClientRect();
     cur.dx = cur.sx - r.left; cur.dy = cur.sy - r.top;
-    const g = cur.el.cloneNode(true);
+    // пачка: вызывающий может дать свой «призрак» (стопку из нескольких)
+    const g = (opt.ghost && opt.ghost(cur.el, cur.data, r)) || cur.el.cloneNode(true);
     g.classList.add('drag-ghost');
     g.removeAttribute('id');
-    Object.assign(g.style, { width: r.width + 'px', left: '0', top: '0' });
+    Object.assign(g.style, { width: r.width + 'px', height: r.height + 'px', left: '0', top: '0' });
     document.body.append(g);
     cur.ghost = g;
     cur.el.classList.add('drag-src');
@@ -85,14 +88,38 @@ export function pointerDrag(root, opt) {
   // листают колёсиком — то, что под мышью, поменялось
   const onScroll = () => { if (cur && cur.started) opt.move(cur.data, cur.x, cur.y); };
 
+  // встроенное перетаскивание браузера (картинки, ссылки) перехватило бы мышь: карточка не бралась бы в руку,
+  // а страница решала бы, что над ней несут файл
+  root.addEventListener('dragstart', e => { if (cur) e.preventDefault(); });
+  addEventListener('pointercancel', () => { if (cur) finish(false); }, true);
   root.addEventListener('pointerdown', e => {
     if (e.button !== 0 || cur) return;
     const got = opt.pick(e);
     if (!got) return;
+    scroller = scrollerOf();
     cur = { ...got, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, started: false };
     addEventListener('pointermove', onMove, true);
     addEventListener('pointerup', onUp, true);
     addEventListener('keydown', onKey, true);
     scroller.addEventListener('scroll', onScroll, { passive: true });
   });
+}
+
+// Стопка для переноса нескольких: до трёх настоящих карточек веером и число сверху.
+export function stackGhost(els, total, r) {
+  const box = document.createElement('div');
+  box.className = 'drag-stack';
+  const list = els.slice(0, 3).reverse(); // взятая — сверху
+  list.forEach((el, i) => {
+    const c = el.cloneNode(true);
+    c.classList.remove('sel', 'drag-src');
+    const k = list.length - 1 - i; // 0 — верхняя
+    Object.assign(c.style, { position: 'absolute', left: k * 9 + 'px', top: k * 7 + 'px', width: r.width + 'px', height: r.height + 'px', margin: '0', transform: `rotate(${k * -3}deg)`, opacity: k ? '.9' : '1' });
+    box.append(c);
+  });
+  const n = document.createElement('b');
+  n.className = 'drag-stack-n';
+  n.textContent = total;
+  box.append(n);
+  return box;
 }

@@ -214,7 +214,10 @@ export function guessCat(text) {
 }
 
 // Пункты из текста ячейки кадра: «Чашка, нож; синяк» -> ['Чашка', 'нож', 'синяк']
-export const splitItems = text => String(text || '').split(/[,;\n]+/).map(t => t.trim().replace(/\.$/, '')).filter(t => t && t.length <= 80);
+// Пункты ячейки: список по строкам (так пишут плашки режиссёрского — запятая внутри пункта остаётся),
+// а вписанное руками в одну строку делится по запятым и точкам с запятой.
+// Пункт — строка целиком: запятая внутри («Цветок в горшке, как с луга») пункт не делит.
+export const splitItems = text => String(text || '').split(/\n+/).map(x => x.trim().replace(/\.$/, '')).filter(x => x && x.length <= 120);
 
 const findItem = (p, sceneId, t) => (p.breakdown || []).find(x => x.sceneId === sceneId && x.text.toLowerCase() === t.toLowerCase());
 
@@ -295,6 +298,27 @@ export function locationFromScene(p, sceneId, uid) {
   for (const pl of p.plans) if (!pl.locationId && l.sceneIds.includes(pl.sceneId)) pl.locationId = l.id;
   p.locations.push(l);
   return l;
+}
+
+// После разбора у каждого места из сценария есть локация: сцена без локации привязывается к уже
+// существующей с тем же объектом и подобъектом, иначе для неё создаётся новая. Возвращает число новых.
+export function ensureLocations(p, sceneIds, uid) {
+  const info = sceneInfo(p), key = t => String(t || '').toUpperCase().replace(/Ё/g, 'Е').replace(/\s+/g, ' ').trim();
+  let made = 0;
+  for (const sid of sceneIds) {
+    const s = info.find(x => x.id === sid);
+    if (!s || (p.locations || []).some(l => l.sceneIds.includes(sid))) continue;
+    const full = placeName(p, s.place || s.text), dot = full.indexOf('.');
+    const object = dot < 0 ? full : full.slice(0, dot).trim(), sub = dot < 0 ? '' : full.slice(dot + 1).replace(/^[\s.]+/, '').trim();
+    // «ЗТМ», «Титры» и подобное — не место съёмки
+    if (!object || /^(зтм|ктм|из зтм|затемнение|титры?|конец|флэшбэк|flashback)/i.test(object.trim())) continue;
+    const l = p.locations.find(x => key(x.object) === key(object) && key(x.sub) === key(sub));
+    if (l) {
+      l.sceneIds.push(sid);
+      for (const pl of p.plans) if (!pl.locationId && pl.sceneId === sid) pl.locationId = l.id;
+    } else if (locationFromScene(p, sid, uid)) made++;
+  }
+  return made;
 }
 
 // Хронометраж, как его вписал человек: «1:10», «70» (секунды), «1 мин 10 с» -> «01:10». Пусто или непонятно -> ''.

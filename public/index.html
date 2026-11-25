@@ -20,8 +20,8 @@
     <a class="ico" id="back" href="#/" title="Назад" aria-label="Назад" hidden><svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg></a>
     <span class="crumb" id="crumb">Проекты</span>
     <span class="plan-only plan-pick">
-      <label class="scene-pick"><span class="sr">План</span><select id="scene-select"></select></label>
-      <button class="btn" id="new-scene" title="Новый план">Новый план</button>
+      <button class="plan-cur" id="plan-cur" aria-haspopup="menu" title="Планы проекта. Щелчок по текущему плану в списке — переименовать"><b id="plan-cur-name"></b><small id="plan-cur-sub"></small><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button>
+      <button class="plan-plus" id="new-scene" title="Новый план" aria-label="Новый план"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
     </span>
     <span class="grow"></span>
     <span class="status" id="status" role="status"></span>
@@ -62,7 +62,7 @@
               <button role="tab" data-mode="3d" aria-selected="false">3D</button>
             </div>
             <button class="chipbtn" id="layers-btn">Слои</button>
-            <button class="chipbtn" id="phases-btn">Фазы</button>
+            <span class="phase-nav"><button class="chipbtn ph-step" id="phase-prev" title="Предыдущая фаза (←, если ничего не выбрано)" aria-label="Предыдущая фаза"><svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg></button><button class="chipbtn" id="phases-btn">Фазы</button><button class="chipbtn ph-step" id="phase-next" title="Следующая фаза (→, если ничего не выбрано)" aria-label="Следующая фаза"><svg viewBox="0 0 24 24"><path d="M10 6l6 6-6 6"/></svg></button></span>
             <button class="chipbtn loc-chip" id="loc-btn" title="Локация этого плана"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg><span>Локация</span></button>
             <button class="chipbtn side-btn" id="side-btn" title="Свернуть панель" aria-label="Свернуть панель"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
           </div>
@@ -94,6 +94,7 @@
   </div>
 
   <div id="ctx" class="pop" role="dialog" aria-label="Настройки"></div>
+  <div id="plan-menu" class="pop plan-menu" role="menu" aria-label="Планы проекта"></div>
   <div id="toast" role="status"></div>
   <div id="print"></div>
   <script type="module" src="app.js"></script>

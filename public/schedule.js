@@ -9,7 +9,7 @@ import { castList, scheduledIds, dayInfo, nextDate, dayOutOfDays, stripClass, sy
 import { exportKPP } from './kppexport.js';
 import { setDur } from './scenes.js';
 import { openSides } from './split.js';
-import { pointerDrag } from './dragsort.js';
+import { pointerDrag, stackGhost } from './dragsort.js';
 
 const project = () => store.project;
 const X = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
@@ -45,9 +45,9 @@ function strip(s, cast, itemId = '', fixed = false) {
   const p = project();
   const who = cast.filter(c => s.chars.includes(c.char)).map(c => title(c.char)).join(', ');
   return `<div class="strip ${stripClass(s)}"${fixed ? '' : ` data-drag="${itemId ? 'item:' + itemId : 'scene:' + s.id}"`} data-n="${s.n}" data-q="${esc(haystack(p, s, cast))}" title="${esc((s.place || s.text) + (synopsisOf(p, s) ? ' — ' + synopsisOf(p, s) : ''))}">
-    <button class="st-n" data-scene-open="${s.id}" title="Открыть сцену">${s.n}</button><button class="st-dur${s.durOwn ? ' own' : ''}" data-dur="${s.id}" title="Хронометраж${s.durOwn ? ' (свой)' : ''}. Щёлкните, чтобы исправить"${fixed ? ' disabled' : ''}>${esc(s.dur || '—')}</button>
+    <button class="st-n" data-scene-open="${s.id}" title="Открыть сцену">${s.n}</button><span class="st-dur${s.durOwn ? ' own' : ''}" title="Хронометраж${s.durOwn ? ' (свой)' : ''}. Поправить можно в разборе сцены">${esc(s.dur || '—')}</span>
     <span class="st-time">${esc((s.time || '').toLowerCase())}</span><span class="st-ie">${esc(s.ie || '—')}</span>
-    <button class="st-place" data-scene-open="${s.id}" title="${esc(s.place || s.text)} — открыть сцену">${(() => { const o = objectOf(p, s); return o.name ? `<b>${esc(o.name)}</b>${o.sub ? `<span class="st-sub">${esc(o.sub)}</span>` : ''}` : esc(s.place || s.text); })()}</button><span class="st-cast" title="Персонажи">${esc(who)}</span></div>`;
+    <span class="st-place" title="${esc(s.place || s.text)}">${(() => { const o = objectOf(p, s); return o.name ? `<b>${esc(o.name)}</b>${o.sub ? `<span class="st-sub">${esc(o.sub)}</span>` : ''}` : esc(s.place || s.text); })()}</span><span class="st-cast" title="Персонажи">${esc(who)}</span></div>`;
 }
 
 // Неразложенные сцены после поиска и фильтров бокового стола.
@@ -108,6 +108,7 @@ function byObjects(p, d, info, cast, fixed) {
 
 export function renderSchedule() {
   queueMicrotask(() => findScene(findQ, false)); // подсветка поиска переживает перерисовку
+  queueMicrotask(markChosen); // и выбор нескольких сцен тоже
   const p = project(), base = `#/p/${p.id}`, sch = p.schedule, info = sceneInfo(p), cast = castList(p, info);
   const done = scheduledIds(p), free = freeScenes(p, info);
   const allFree = info.filter(s => !done.has(s.id));
@@ -133,7 +134,8 @@ export function renderSchedule() {
     ${variantsBar(p)}
     <p class="page-hint">${info.length ? `Разложено сцен: ${info.length - allFree.length} из ${info.length}, смен: ${works}. Перетаскивайте сцены между днями и на боковой стол. Смены переставляются за ручку слева от номера: смена получает дату и номер нового места. Меню «…» у дня: тип дня, ночная смена, замок, перенос на дату и обмен днями. Разложить сцены по дням с учётом локаций, актёров и режима может подключённый ИИ-помощник.` : 'Сцены появятся, когда в сценарии будут строки «Время и место».'}</p>
     <div class="sd-board">
-      <div class="sd-days"><button class="sd-addday" data-act="add-day" title="Добавить съёмочный день в конец" aria-label="Добавить съёмочный день"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>${sch.days.map(d => dayHTML(p, d, info, cast, base)).join('') || '<p class="empty">Съёмочных дней пока нет. Добавьте день плюсом справа и перетащите в него сцены — или попросите ИИ-помощника разложить КПП.</p>'}</div>
+      <div class="sd-days">${sch.days.map((d, i) => (i && mode === 'order' ? `<div class="sd-gap"><button class="sd-gapadd" data-gap="${i}" title="Вставить день сюда: смену, выходной, отсыпной…" aria-label="Вставить день между днями"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>` : '') + dayHTML(p, d, info, cast, base)).join('') || '<p class="empty">Съёмочных дней пока нет. Добавьте день плюсом внизу и перетащите в него сцены — или попросите ИИ-помощника разложить КПП.</p>'}
+        <div class="sd-addbar"><button class="sd-addday" data-act="add-day" title="Добавить съёмочный день в конец" aria-label="Добавить съёмочный день"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div></div>
       <aside class="sd-side" data-drop="side">
         <header><h2>Боковой стол <span>${allFree.length}</span></h2>
           <input class="sd-sq" type="search" placeholder="Номер, место, персонаж" value="${esc(side.q)}" aria-label="Поиск по боковому столу">
@@ -144,6 +146,9 @@ export function renderSchedule() {
           </div>
           <div class="chips">${[['all', 'Все'], ['int', 'Инт'], ['ext', 'Нат'], ['night', 'Ночь и режим']].map(([k, t]) => `<button data-filter="${k}" aria-pressed="${filter === k}">${t}</button>`).join('')}</div></header>
         <div class="sd-strips">${sideHTML || `<p class="sd-empty">${allFree.length ? 'Ничего не нашлось' : 'Все сцены разложены'}</p>`}</div>
+        <div class="sd-banners"><h3>Плашки <span>перетащите в день</span></h3>
+          <div class="sd-bnlist">${bannerList(p).map(t => `<div class="strip st-banner sd-bn" data-drag="banner:${esc(t)}" title="Перетащите в день"><span>${esc(t)}</span></div>`).join('')}</div>
+          <input class="sd-bnadd" placeholder="+ своя плашка и Enter" aria-label="Своя плашка"></div>
       </aside>
     </div>
 
@@ -157,6 +162,15 @@ export function renderSchedule() {
       ${dood.filter(r => r.work).map(r => `<tr><td>${r.n}</td><td>${esc(title(r.char))}${r.actor ? `<small>${esc(r.actor)}</small>` : ''}</td>${r.marks.map(m => `<td class="dd-${m || 'none'}">${MARK[m] || ''}</td>`).join('')}<td>${r.work}</td></tr>`).join('')}
       </tbody></table></div><p class="page-hint">● съёмочный день, «нач» и «кон» — первый и последний, точка — дни ожидания между ними.</p></section>` : ''}
   </div>`;
+}
+
+// универсальные плашки: обычные для площадки плюс свои (вписанные здесь или уже стоящие в днях)
+const BANNERS = ['Обед', 'Переезд', 'Ждём режим'];
+function bannerList(p) {
+  const mine = [...(p.schedule.info.banners || []), ...p.schedule.days.flatMap(d => d.items.filter(x => x.type === 'banner').map(x => x.text))];
+  const out = [];
+  for (const t of [...BANNERS, ...mine]) if (t && !out.some(x => x.toLowerCase() === t.toLowerCase())) out.push(t);
+  return out;
 }
 
 // ---------- варианты раскладки ----------
@@ -346,8 +360,9 @@ view.addEventListener('click', async e => {
   if (act === 'kpp-pdf' || act === 'kpp-xlsx') { exportKPP(p, act === 'kpp-pdf' ? 'pdf' : 'xlsx'); return; }
   if (act === 'add-day') {
     sch.days.push({ id: 'day-' + uid(), date: nextDate(p), call: '08:00', wrap: '', lunch: '', weather: '', note: '', items: [], times: {}, kind: 'work', night: false, locked: false });
+    if (sch.info.start) datesFrom(p, sch.info.start);
     store.touch(); rerender();
-    view.querySelector('.sd-day:last-of-type')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    toast(`Добавлена смена ${sch.days.filter(d => d.kind === 'work').length}`);
   }
   if (act === 'banner') {
     const text = await ask('Плашка в дне', { text: 'Например: «Обед», «Переезд на тропинку», «Ждём режим».', placeholder: 'Текст плашки', ok: 'Добавить' });
@@ -383,8 +398,19 @@ pointerDrag(view, {
     const g = !e.target.closest('input, button, a, label, select') && e.target.closest('[data-daydrag]');
     if (g) return { el: g.closest('.sd-day'), data: 'day:' + g.dataset.daydrag };
     const el = e.target.closest('[data-drag]');
-    if (!el || e.target.closest('input')) return null;
+    if (!el || e.target.closest('input') || e.shiftKey || e.ctrlKey || e.metaKey) return null; // с Shift/Ctrl — выбор, а не перенос
+    // взяли выбранную полосу — едут все выбранные (в том порядке, как стоят на экране)
+    if (chosen.has(el.dataset.drag) && chosen.size > 1) {
+      const keys = [...view.querySelectorAll('[data-drag]')].map(x => x.dataset.drag).filter(k => chosen.has(k));
+      el.dataset.count = keys.length;
+      return { el, data: 'multi:' + keys.join(',') };
+    }
     return { el, data: el.dataset.drag };
+  },
+  ghost(el, data, r) {
+    if (!data.startsWith('multi:')) return null;
+    const keys = data.slice(6).split(','), els = [el, ...keys.map(k => view.querySelector(`[data-drag="${k}"]`)).filter(x => x && x !== el)];
+    return stackGhost(els, keys.length, r);
   },
   move(data, x, y) {
     unmark();
@@ -404,11 +430,13 @@ pointerDrag(view, {
     }
     const zone = zoneAt(x, y);
     if (!zone) return;
+    if (dragging.startsWith('multi:')) { dropMany(dragging.slice(6).split(','), zone, y); return; }
     const p = project(), sch = p.schedule, [kind, id] = dragging.split(':');
     const { before } = dropSpot(y, zone);
     // вынимаем перетаскиваемое оттуда, где оно было
     let items = [];
     if (kind === 'item') { for (const d of sch.days) { const i = d.items.findIndex(x2 => x2.id === id); if (i >= 0) { if (d.locked) return; items = d.items.splice(i, 1); break; } } }
+    else if (kind === 'banner') items = [{ id: uid(), type: 'banner', text: dragging.slice(7) }];
     else if (kind === 'obj') { const info = sceneInfo(p); items = freeScenes(p, info).filter(s => objectOf(p, s).key === id).map(s => ({ id: uid(), type: 'scene', sceneId: s.id })); }
     else items = [{ id: uid(), type: 'scene', sceneId: id }];
     if (zone.dataset.drop !== 'side' && items.length) {
@@ -420,7 +448,133 @@ pointerDrag(view, {
     }
     store.touch(); rerender();
   },
-  end: unmark,
+  end() { unmark(); for (const x of view.querySelectorAll('[data-count]')) delete x.dataset.count; },
 });
 
+// ---------- выбор нескольких сцен: Shift/Ctrl+щелчок и рамка ----------
+// Shift или Ctrl со щелчком по полосе добавляет её к выбору (или убирает). Рамка с пустого места выбирает
+// всё, что задела (с Shift/Ctrl — добавляет). Щелчок по пустому месту или Escape снимает выбор.
+// Выбранные полосы переносятся вместе: в день (встают подряд) или обратно на стол.
+let chosen = new Set();
+function markChosen() {
+  for (const x of view.querySelectorAll('[data-drag]')) x.classList.toggle('sel', chosen.has(x.dataset.drag));
+  const n = view.querySelector('.sd-chosen');
+  if (n) n.remove();
+  if (chosen.size) {
+    const bar = document.createElement('div');
+    bar.className = 'sd-chosen';
+    bar.innerHTML = `Выбрано сцен: <b>${chosen.size}</b> — перетащите любую из них <button class="linkbtn" data-act="unchoose">снять выбор</button>`;
+    view.append(bar);
+  }
+}
+const chooseKey = el => el.dataset.drag;
+const choosable = el => el && el.matches('[data-drag]') && !el.dataset.drag.startsWith('obj:') && !el.dataset.drag.startsWith('banner:');
+view.addEventListener('click', e => {
+  if (e.target.closest('[data-act="unchoose"]')) { e.preventDefault(); e.stopPropagation(); chosen.clear(); markChosen(); return; }
+  const el = e.target.closest('[data-drag]');
+  if (!choosable(el)) return;
+  const add = e.shiftKey || e.ctrlKey || e.metaKey;
+  if (!add && e.target.closest('button, a, input')) return; // номер сцены и кнопки работают как раньше
+  e.preventDefault(); e.stopPropagation();
+  const k = chooseKey(el);
+  if (add) { if (chosen.has(k)) chosen.delete(k); else chosen.add(k); }
+  else if (chosen.size === 1 && chosen.has(k)) chosen.clear(); // второй щелчок по той же — снять
+  else chosen = new Set([k]);
+  markChosen();
+}, true);
+addEventListener('keydown', e => { if (e.key === 'Escape' && chosen.size && document.body.dataset.view === 'schedule') { chosen.clear(); markChosen(); } });
+
+let band = null;
+view.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target.closest('[data-drag], [data-daydrag], button, a, input, select, label, textarea, [contenteditable], .sd-chosen')) return;
+  band = { x: e.clientX, y: e.clientY, add: e.shiftKey || e.ctrlKey || e.metaKey, base: new Set(chosen), el: null, moved: false };
+});
+addEventListener('pointermove', e => {
+  if (!band) return;
+  const x1 = Math.min(band.x, e.clientX), y1 = Math.min(band.y, e.clientY), x2 = Math.max(band.x, e.clientX), y2 = Math.max(band.y, e.clientY);
+  if (!band.moved && x2 - x1 < 5 && y2 - y1 < 5) return;
+  band.moved = true;
+  if (!band.el) { band.el = document.createElement('div'); band.el.className = 'stash-band'; document.body.append(band.el); document.body.classList.add('banding'); getSelection()?.removeAllRanges(); }
+  Object.assign(band.el.style, { left: x1 + 'px', top: y1 + 'px', width: x2 - x1 + 'px', height: y2 - y1 + 'px' });
+  for (const el of view.querySelectorAll('[data-drag]')) {
+    if (!choosable(el)) continue;
+    const r = el.getBoundingClientRect(), hit = r.width && r.right > x1 && r.left < x2 && r.bottom > y1 && r.top < y2;
+    el.classList.toggle('sel', hit || (band.add && band.base.has(chooseKey(el))));
+  }
+});
+addEventListener('pointerup', () => {
+  if (!band) return;
+  const b = band; band = null;
+  if (b.el) b.el.remove();
+  document.body.classList.remove('banding');
+  if (!b.moved) { if (!b.add && chosen.size) { chosen.clear(); markChosen(); } return; }
+  chosen = new Set(b.add ? b.base : []);
+  for (const el of view.querySelectorAll('[data-drag].sel')) chosen.add(chooseKey(el));
+  markChosen();
+});
+
+// пачку — в день (подряд, на место, куда указали) или на стол (снять с дней)
+function dropMany(keys, zone, y) {
+  const p = project(), sch = p.schedule, moving = new Set(keys);
+  if (keys.some(k => k.startsWith('item:') && sch.days.some(d => d.locked && d.items.some(x => 'item:' + x.id === k)))) return toast('В закреплённом дне сцены не двигаются — откройте замок');
+  // куда вставлять: перед полосой под мышью, если она не из пачки (иначе — перед следующей не из пачки)
+  let bid = '';
+  if (zone.dataset.drop !== 'side' && mode === 'order') {
+    const strips = [...zone.querySelectorAll('.sd-strips [data-drag]')];
+    const i = strips.findIndex(x => { const r = x.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    const t = i >= 0 ? strips.slice(i).find(x => !moving.has(x.dataset.drag)) : null;
+    bid = t && t.dataset.drag.startsWith('item:') ? t.dataset.drag.slice(5) : '';
+  }
+  const items = [];
+  for (const k of keys) {
+    const [kind, id] = k.split(':');
+    if (kind === 'item') { for (const d of sch.days) { const i = d.items.findIndex(x => x.id === id); if (i >= 0) { items.push(...d.items.splice(i, 1)); break; } } }
+    else if (kind === 'scene') items.push({ id: uid(), type: 'scene', sceneId: id });
+  }
+  if (zone.dataset.drop !== 'side') {
+    const d = dayOf(zone.dataset.drop), at = bid ? d.items.findIndex(x => x.id === bid) : -1;
+    if (at >= 0) d.items.splice(at, 0, ...items); else d.items.push(...items);
+    toast(`Перенесено сцен: ${items.filter(x => x.type === 'scene').length}`);
+  } else toast(`Сняты с дней: ${items.filter(x => x.type === 'scene').length}`);
+  chosen.clear();
+  store.touch(); rerender();
+}
+
 document.addEventListener('miz:scene-changed', () => { if (document.body.dataset.view === 'schedule') rerender(); });
+
+// ---------- вставить день между днями ----------
+let gapAt = -1;
+view.addEventListener('click', e => {
+  const g = e.target.closest('[data-gap]');
+  if (!g) return;
+  e.stopPropagation();
+  gapAt = +g.dataset.gap;
+  ctx.dataset.kind = 'gapmenu';
+  ctx.innerHTML = `<h2>Вставить день</h2><div class="menu">${Object.entries(DAY_KINDS).map(([k, t]) => `<button data-gapkind="${k}">${k === 'work' ? 'Съёмочная смена' : t}</button>`).join('')}</div>`;
+  ctx.classList.add('on');
+  const r = g.getBoundingClientRect();
+  ctx.style.left = Math.max(8, Math.min(r.left + r.width / 2 - ctx.offsetWidth / 2, innerWidth - ctx.offsetWidth - 8)) + 'px';
+  ctx.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - ctx.offsetHeight - 8)) + 'px';
+});
+ctx.addEventListener('click', e => {
+  const b = e.target.closest('[data-gapkind]');
+  if (!b || ctx.dataset.kind !== 'gapmenu') return;
+  ctx.classList.remove('on');
+  const p = project(), sch = p.schedule, kind = b.dataset.gapkind;
+  sch.days.splice(gapAt, 0, { id: 'day-' + uid(), date: '', call: '08:00', wrap: '', lunch: '', weather: '', note: '', items: [], times: {}, kind, night: false, locked: false });
+  // даты подряд от первого дня: всё после вставленного сдвигается на день
+  if (sch.info.start) datesFrom(p, sch.info.start);
+  store.touch(); rerender();
+  toast(`Вставлен ${kind === 'work' ? 'съёмочный день' : DAY_KINDS[kind].toLowerCase() + ' день'}${sch.info.start ? ': даты после него сдвинулись' : ''}`);
+});
+document.addEventListener('pointerdown', e => { if (ctx.dataset.kind === 'gapmenu' && ctx.classList.contains('on') && !ctx.contains(e.target)) ctx.classList.remove('on'); }, true);
+
+// своя плашка на столе
+view.addEventListener('keydown', e => {
+  if (!e.target.matches('.sd-bnadd') || e.key !== 'Enter') return;
+  const t = e.target.value.trim();
+  if (!t) return;
+  const info = project().schedule.info;
+  info.banners = [...(info.banners || []), t];
+  store.touch(); rerender('.sd-bnadd');
+});

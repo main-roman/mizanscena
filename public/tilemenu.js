@@ -4,6 +4,7 @@ import { store, $, esc, toast } from './store.js';
 import { sceneInfo } from './breakdown.js';
 import { refreshSplit } from './split.js';
 import { exportPlan } from './planexport.js';
+import { bindPlan } from './interior.js';
 
 const ctx = $('#ctx');
 let target = null; // { kind: 'plan' | 'loc', id, sceneId, locId }
@@ -38,7 +39,9 @@ document.addEventListener('contextmenu', e => {
     const locId = view === 'location' ? parts[3] : '';
     target = { kind: 'plan', id, sceneId, locId };
     const sc = sceneInfo(p).find(x => x.id === pl.sceneId), l = p.locations.find(x => x.id === pl.locationId);
-    item = `<h2>${esc(pl.name)}</h2><div class="menu"><button data-menu="open">Открыть в Shot Designer</button>`
+    const info = sceneInfo(p);
+    item = `<h2>${esc(pl.name)}</h2><div class="menu"><button data-menu="open">Открыть план</button>`
+      + (info.length ? `<label class="menu-row menu-scene"><span>${sc ? 'Другая сцена' : 'В сцену'}</span><select data-menu-scene aria-label="Привязать к сцене"><option value="">выбрать…</option>${info.filter(x => x.id !== pl.sceneId).map(x => `<option value="${x.id}">${x.n}. ${esc(x.place || x.text)}</option>`).join('')}</select></label>` : '')
       + (sc ? `<button data-menu="unscene">Отвязать от сцены<small>сейчас сцена ${sc.n}</small></button>` : '')
       + (l ? `<button data-menu="unloc">Отвязать от локации<small>${esc(l.name)}</small></button>` : '')
       + `<div class="menu-row"><span>Скачать</span><button data-menu="jpg">JPG</button><button data-menu="png">PNG</button><button data-menu="pdf">PDF</button></div>`
@@ -52,6 +55,15 @@ document.addEventListener('contextmenu', e => {
   ctx.style.top = Math.max(8, Math.min(e.clientY + 6, innerHeight - ctx.offsetHeight - 8)) + 'px';
 });
 
+ctx.addEventListener('change', e => {
+  if (!e.target.matches('[data-menu-scene]') || ctx.dataset.kind !== 'tile' || !target || !e.target.value) return;
+  const p = store.project, pl = p.plans.find(x => x.id === target.id);
+  if (!pl) return;
+  ctx.classList.remove('on');
+  bindPlan(p, pl, e.target.value, target.locId);
+  const n = (sceneInfo(p).find(x => x.id === e.target.value) || {}).n;
+  store.touch(); rerender(); toast(`План «${pl.name}» — в сцене ${n}`);
+});
 ctx.addEventListener('click', e => {
   const b = e.target.closest('[data-menu]');
   if (!b || ctx.dataset.kind !== 'tile' || !target) return;

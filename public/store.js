@@ -2,6 +2,7 @@
 import { storage, blobToData, srcOf } from './storage.js';
 import { cloud, isCloud, merge } from './cloud.js';
 import { FURN, LIGHTS, esc } from './shapes.js';
+import { atPhase } from './shapes.js';
 import { normalizeBreakdown } from './breakdown.js';
 import { normalizeSchedule } from './schedmodel.js';
 
@@ -11,7 +12,17 @@ export const uid = () => Math.random().toString(36).slice(2, 8);
 export const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 export { esc };
 
-export const SIZES = ['Деталь', 'Крупный', 'Средний по пояс', 'Средний по колено', 'Общий', 'Дальний'];
+// картинки раскадровки кадра и их правка
+export const framesOf = s => Array.isArray(s.frames) && s.frames.length ? s.frames : (s.frame ? [s.frame] : []);
+export function setFrames(s, list) { s.frames = list.filter(Boolean); s.frame = s.frames[0] || ''; }
+export async function addFrameFiles(s, files, max = 1600) {
+  let n = 0;
+  for (const f of files) { try { setFrames(s, [...framesOf(s), (await storeImage(f, max)).src]); n++; } catch { /* битая картинка — пропускаем */ } }
+  return n;
+}
+export const SIZES = ['Деталь', 'Крупный', 'Первый средний', 'Второй средний', 'Третий средний', 'Общий', 'Дальний'];
+// прежние названия средних планов
+const OLD_SIZES = { 'Средний по пояс': 'Первый средний', 'Средний по колено': 'Второй средний' };
 export const MOVES = ['Статика', 'Панорама', 'Наезд или отъезд', 'Тележка', 'Стедикам', 'С рук', 'Кран', 'Слайдер', 'Пролёт'];
 
 export function normalizePlan(s) {
@@ -49,8 +60,13 @@ export function normalizeProject(p) {
     s.id = s.id || uid();
     delete s.desc;
     for (const k of ['sceneId', 'planId', 'cameraId', 'phaseId', 'content', 'note', 'mode', 'dur', 'chars', 'props', 'tech', 'frame']) s[k] = s[k] || '';
-    s.size = s.size || SIZES[2];
-    s.move = s.move || MOVES[0];
+    // крупность и движение могут быть пустыми: их не подставляем наугад
+    s.size = typeof s.size === 'string' ? (OLD_SIZES[s.size] || s.size) : '';
+    s.move = typeof s.move === 'string' ? s.move : '';
+    // несколько картинок раскадровки (панорама в несколько кадриков); frame — всегда первая
+    if (!Array.isArray(s.frames)) s.frames = s.frame ? [s.frame] : [];
+    s.frames = s.frames.filter(x => typeof x === 'string' && x);
+    s.frame = s.frames[0] || '';
   }
   p.locations = Array.isArray(p.locations) ? p.locations : [];
   for (const l of p.locations) normalizeLocation(l);
@@ -139,14 +155,18 @@ export function numbering(p) {
 export function shotAuto(p, shot) {
   const plan = p.plans.find(x => x.id === shot.planId);
   if (!plan) return { plan: null, camera: null, lens: '', lights: [], chars: [] };
-  const camera = plan.objects.find(o => o.id === shot.cameraId) || null;
+  // объектив — тот, что у камеры в фазе этого кадра
+  const camera = atPhase(plan, shot.phaseId || '').objects.find(o => o.id === shot.cameraId) || plan.objects.find(o => o.id === shot.cameraId) || null;
   const lights = plan.objects.filter(o => o.type === 'light' && !o.off).map(o => {
     const kind = (LIGHTS[o.kind] || {}).name || 'Свет';
     return o.label ? `${o.label} (${kind.toLowerCase()})` : kind;
   });
   const chars = plan.objects.filter(o => o.type === 'character' && o.name).map(o => o.name);
-  return { plan, camera, lens: camera ? `${camera.lens} мм` : '', lights, chars };
+  return { plan, camera, lens: shot.lens || (camera ? `${camera.lens} мм` : ''), lights, chars };
 }
+
+// снимок для отмены: порядок полей не важен, важна суть
+const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x) ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
 
 export const store = {
   project: null,
@@ -165,6 +185,7 @@ export const store = {
     p.id = id;
     this.project = p;
     this.last = JSON.stringify(p);
+    this.resetHistory();
     try { localStorage.setItem('miz:last', id); } catch { /* не страшно */ }
     rememberCover(p);
     if (before !== this.last) this.touch(); else this.onStatus('');
@@ -173,7 +194,55 @@ export const store = {
 
   close() { this.project = null; },
 
+  // ---------- отмена и возврат (Ctrl+Z, Ctrl+Y) ----------
+  // Снимок проекта до правки; правки подряд без паузы (набор текста, перетаскивание) — один шаг отмены.
+  resetHistory() { this.undos = []; this.redos = []; this.base = this.project ? canon(this.project) : ''; this.pending = false; clearTimeout(this.histTimer); },
+  settle() {
+    clearTimeout(this.histTimer);
+    if (!this.pending || !this.project) return;
+    this.pending = false;
+    const now = canon(this.project);
+    if (now === this.base) return; // то же содержимое (пусть и в другом порядке полей) — не шаг
+    this.undos.push(this.base);
+    if (this.undos.length > 60) this.undos.shift();
+    this.redos = [];
+    this.base = now;
+  },
+  restore(json) {
+    const id = this.project.id, p = normalizeProject(JSON.parse(json));
+    p.id = id;
+    this.project = p;
+    this.base = canon(p);
+    this.onStatus('Сохраняю…');
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.save(), 300);
+  },
+  // проект заменили снаружи: прежнее состояние — шаг отмены
+  remember(json) {
+    if (!this.undos) return;
+    this.settle();
+    if (this.base && this.base !== json) { this.undos.push(this.base); if (this.undos.length > 60) this.undos.shift(); this.redos = []; }
+    this.base = json;
+  },
+  undo() {
+    if (!this.project) return false;
+    this.settle();
+    if (!this.undos || !this.undos.length) return false;
+    this.redos.push(this.base);
+    this.restore(this.undos.pop());
+    return true;
+  },
+  redo() {
+    if (!this.project) return false;
+    this.settle();
+    if (!this.redos || !this.redos.length) return false;
+    this.undos.push(this.base);
+    this.restore(this.redos.pop());
+    return true;
+  },
+
   touch() {
+    if (this.project && this.undos) { this.pending = true; clearTimeout(this.histTimer); this.histTimer = setTimeout(() => this.settle(), 700); }
     this.onStatus('Сохраняю…');
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.save(), 500);
@@ -209,6 +278,7 @@ export const store = {
         next.id = p.id;
         this.project = next;
         this.last = JSON.stringify(next);
+        this.base = canon(next); // отмена дальше идёт от объединённой версии
         this.onRemote(next, 'merge');
         if (this.last !== JSON.stringify(merged)) this.touch();
       }
@@ -237,6 +307,7 @@ export const store = {
       cloud.accept(p.id, r.data, r.version);
       const next = normalizeProject(r.data);
       next.id = p.id;
+      this.remember(canon(next));
       this.project = next;
       this.last = JSON.stringify(next);
       this.onRemote(next, 'cloud');
@@ -256,6 +327,12 @@ export const store = {
         p.id = id;
         const s = JSON.stringify(p);
         if (s === this.last || this.sent.includes(s) || JSON.stringify(this.project) !== this.last) return;
+        // в файле то же, что открыто (это наше же сохранение, поля просто в другом порядке) — не правка снаружи
+        // (и с полями по умолчанию, которые дописывает сохранение)
+        const mine = normalizeProject(JSON.parse(JSON.stringify(this.project)));
+        mine.id = id;
+        if (canon(p) === canon(this.project) || canon(p) === canon(mine)) return;
+        this.remember(canon(p)); // правку снаружи (ИИ-помощник, другое окно) тоже можно отменить Ctrl+Z
         this.project = p;
         this.last = s;
         this.onRemote(p);
@@ -298,7 +375,11 @@ export async function copyToCloud(p) {
 
 function eachImage(p, fn) {
   for (const plan of p.plans) for (const o of plan.objects) if (o.type === 'image') fn(o, 'src');
-  for (const s of p.shots) if (s.frame) fn(s, 'frame');
+  for (const s of p.shots) {
+    // все картинки раскадровки кадра; первая — она же frame
+    if (Array.isArray(s.frames) && s.frames.length) { s.frames.forEach((x, k) => fn(s.frames, k)); s.frame = s.frames[0]; }
+    else if (s.frame) fn(s, 'frame');
+  }
   for (const l of p.locations || []) for (const ph of l.photos || []) fn(ph, 'src');
 }
 
@@ -358,7 +439,14 @@ export function toast(text) {
 
 // Уменьшает выбранную картинку и кладёт её в хранилище; возвращает адрес и пропорции.
 export async function storeImage(file, max = 1800) {
-  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  let bmp;
+  try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+  catch {
+    // некоторые сборки не умеют createImageBitmap для части форматов — открываем через <img>
+    const url = URL.createObjectURL(file);
+    try { bmp = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; }); }
+    finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
   const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
   c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);

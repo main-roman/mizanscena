@@ -4,7 +4,7 @@ import { store, $, uid, esc, toast, numbering } from './store.js';
 import { srcOf } from './storage.js';
 import { planSVG } from './shapes.js';
 import { createPlan } from './plan.js';
-import { CATS, sceneInfo, eighthsText, applyAnalysis, locProps as locPropsOf, locationFromScene, normDur } from './breakdown.js';
+import { CATS, sceneInfo, eighthsText, applyAnalysis, ensureLocations, locProps as locPropsOf, locationFromScene, normDur } from './breakdown.js';
 import { sceneMeta } from './schedmodel.js';
 import { buildIndex, matchScene, matchedItems, suggest, kindName, norm } from './scenesearch.js';
 
@@ -121,9 +121,9 @@ $('#view-scenes').addEventListener('click', e => {
     return;
   }
   if (e.target.closest('[data-act="analyze-all"]')) {
-    const p = project(), n = applyAnalysis(p, sceneInfo(p).map(s => s.id), uid);
+    const p = project(), ids = sceneInfo(p).map(s => s.id), n = applyAnalysis(p, ids, uid), made = ensureLocations(p, ids, uid);
     store.touch(); renderScenes();
-    toast(n ? `Найдено и добавлено: ${n}` : 'Нового не нашлось');
+    toast([n ? `Найдено и добавлено: ${n}` : 'Нового не нашлось', made ? `новых локаций: ${made}` : ''].filter(Boolean).join(' · '));
     return;
   }
   const tr = e.target.closest('tr[data-go]');
@@ -198,7 +198,7 @@ export function sceneHTML(p, sid, panel = false) {
         ${shots.length ? `<ol class="scn-shots">${shots.map(x => `<li><b>${nums.get(x.id)}</b>${x.frame ? `<img src="${esc(srcOf(x.frame))}" alt="" loading="lazy">` : '<span class="scn-noframe"></span>'}<span><i>${esc(x.size)}${x.move && x.move !== 'Статика' ? ', ' + esc(x.move.toLowerCase()) : ''}</i>${esc(x.content) || '<span class="empty">без описания</span>'}</span></li>`).join('')}</ol>` : '<p class="empty">Кадров пока нет.</p>'}
         <a class="act" href="${base}/director">Режиссёрский сценарий</a>
       </section>
-      <section><h2>Shot Designer</h2>
+      <section><h2>Кадры: планы мизансцены</h2>
         <div class="loc-plans">${plans.map(x => `<button class="plan-tile" data-plan-open="${x.id}" title="Показать рядом"><span class="thumb">${planSVG(x, { pad: 0.8 })}</span><span class="tile-name">${esc(x.name)}</span></button>`).join('')}
           <button class="plan-tile plan-new" data-act="new-plan"><span class="thumb">${PLUS}</span><span class="tile-name">Новый план</span></button></div>
         ${planSelect(p, s.id, info)}
@@ -262,9 +262,9 @@ function onClick(e) {
   if (!b) return;
   const act = b.dataset.act;
   if (act === 'analyze') {
-    const n = applyAnalysis(p, [sid], uid);
+    const n = applyAnalysis(p, [sid], uid), made = ensureLocations(p, [sid], uid);
     store.touch(); redraw();
-    toast(n ? `Найдено и добавлено: ${n}` : 'Нового не нашлось');
+    toast([n ? `Найдено и добавлено: ${n}` : 'Нового не нашлось', made ? 'создана локация сцены' : ''].filter(Boolean).join(' · '));
   }
   if (act === 'del-item') {
     const x = p.breakdown.find(q => q.id === b.closest('[data-item]').dataset.item);

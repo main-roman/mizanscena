@@ -4,6 +4,8 @@ import { store, $, $$, uid, esc, toast, replaceHash, download, safeName, storeIm
 import { srcOf } from './storage.js';
 import { planSVG } from './shapes.js';
 import { createPlan } from './plan.js';
+import { baseOf, saveBase, hasEnv, locOfPlan, baseCount, bindPlan } from './interior.js';
+import { pointerDrag } from './dragsort.js';
 import { CATS, sceneInfo, sceneItems } from './breakdown.js';
 import { planSelect } from './scenes.js';
 
@@ -134,44 +136,33 @@ export function renderLocation(id) {
   const looks = s => key.some(w => (s.text || '').toLowerCase().includes(w));
   // планы сцены: привязанные к этой сцене и к этой локации (или ещё ни к какой)
   const scenePlans = sid => p.plans.filter(x => x.sceneId === sid && (!x.locationId || x.locationId === l.id));
+  const sceneIds = new Set(scenes.map(s => s.id));
   const otherPlans = p.plans.filter(x => x.locationId === l.id && !linked.some(s => s.id === x.sceneId));
+  const nobody = p.plans.filter(x => !x.locationId && !sceneIds.has(x.sceneId));
+  syncProps(p, l, linked);
+  // на карточке сцены план крупно и без света: здесь важна расстановка, а не приборы
+  const bigTile = x => `<button class="plan-tile plan-big" data-plan-open="${x.id}" title="Показать рядом"><span class="thumb">${planSVG({ ...x, objects: x.objects.filter(o => o.type !== 'light') }, { pad: 0.5 })}</span><span class="tile-name">${esc(x.name)}</span></button>`;
   const tile = x => `<button class="plan-tile" data-plan-open="${x.id}" title="Показать рядом"><span class="thumb">${planSVG(x, { pad: 0.8 })}</span><span class="tile-name">${esc(x.name)}</span></button>`;
 
-  const item = x => `<li data-prop="${x.id}"${x.ready ? ' class="ready"' : ''}>
-      <input type="checkbox" data-k="ready" ${x.ready ? 'checked' : ''} title="Готово" aria-label="Готово">
-      <input type="text" data-k="text" value="${esc(x.text)}" aria-label="Предмет">
-      <button class="ico" data-act="del-prop" title="Убрать" aria-label="Убрать">${X}</button></li>`;
+  // реквизит — рыжие ячейки, как в режиссёрском и разборе; × убирает, в поле — новый предмет и Enter
+  const chip = x => `<span class="lp-chip" data-prop="${x.id}"><span class="lp-t" data-lp-edit title="Щёлкните, чтобы исправить">${esc(x.text)}</span><button data-act="del-prop" title="Убрать" aria-label="Убрать">×</button></span>`;
   const group = (sid, title = '') => `<div class="props-group" data-scene="${sid}">${title ? `<h3>${title}</h3>` : ''}
-      <ul class="props-list">${l.props.filter(x => x.sceneId === sid).map(item).join('')}</ul>
-      <input class="props-add" type="text" placeholder="${sid ? 'Что нужно только в этой сцене' : 'Предмет и Enter'}" aria-label="Добавить предмет"></div>`;
+      <div class="lp-chips">${l.props.filter(x => x.sceneId === sid && x.text.trim()).map(chip).join('')}
+      <input class="props-add lp-add" type="text" placeholder="${sid ? '+ предмет для этой сцены' : '+ предмет'}" aria-label="Добавить предмет"></div></div>`;
   const lost = [...new Set(l.props.map(x => x.sceneId).filter(sid => sid && !linked.some(s => s.id === sid)))];
 
   const info = sceneInfo(p);
-  // из разбора сцены: то, что нужно художнику; щелчок переносит в постановочный реквизит этой сцены
-  const fromBd = sid => {
-    const it = sceneItems(p, sid, info, false), mine = l.props.filter(x => x.sceneId === sid || x.sceneId === '').map(x => x.text.toLowerCase());
-    const list = ['props', 'sfx', 'animals', 'vehicles', 'extras'].flatMap(c => it[c].map(t => [c, t]));
-    if (!list.length) return `<p class="bd-from empty">В разборе сцены пока пусто. <a href="${base}/scene/${sid}">Разобрать сцену</a></p>`;
-    return `<div class="bd-from"><h4>Из разбора сцены <a href="${base}/scene/${sid}">весь разбор</a></h4><div class="bd-chips">${list.map(([c, t]) => {
-      const added = mine.includes(t.toLowerCase());
-      return `<button class="bd-chip cat-${c}${added ? ' added' : ''}" data-act="take" data-scene="${sid}" data-text="${esc(t)}" title="${added ? 'Уже в списке реквизита' : CATS[c] + ': добавить в реквизит этой сцены'}"${added ? ' disabled' : ''}>${added ? '✓ ' : '+ '}${esc(t)}</button>`;
-    }).join('')}</div></div>`;
-  };
-
   const sceneCard = s => {
-    const plans = scenePlans(s.id), frames = p.shots.filter(x => x.frame && x.sceneId === s.id);
+    const plans = scenePlans(s.id);
     return `<article class="loc-sc" data-scene="${s.id}">
       <header class="loc-sc-head"><button class="loc-sc-title" data-scene-open="${s.id}" title="Показать текст сцены рядом"><b>Сцена ${s.t.n}</b><span>${esc(s.t.text)}</span></button>
         <button class="act" data-scene-open="${s.id}">Текст сцены</button>
         <button class="ico" data-act="unlink" data-scene="${s.id}" title="Отвязать сцену от локации" aria-label="Отвязать сцену">${X}</button></header>
       <div class="loc-sc-body">
-        <div><h4>Реквизит этой сцены</h4>${group(s.id)}${fromBd(s.id)}</div>
-        <div><h4>Shot Designer</h4>
-          <div class="loc-plans">${plans.map(tile).join('')}
-            <button class="plan-tile plan-new" data-act="new-plan" data-scene="${s.id}"><span class="thumb">${PLUS}</span><span class="tile-name">Новый план</span></button></div>
-          ${planSelect(p, s.id, info)}
-          ${plans.length ? '<p class="tile-hint">Правая кнопка по плану: отвязать или удалить</p>' : ''}
-          ${frames.length ? `<div class="loc-frames">${frames.map(x => `<a href="${base}/director" title="Кадр ${nums.get(x.id)}"><img src="${esc(srcOf(x.frame))}" alt="" loading="lazy"><b>${nums.get(x.id)}</b></a>`).join('')}</div>` : ''}
+        <div><h4>Реквизит этой сцены</h4>${group(s.id)}</div>
+        <div><h4>Планы мизансцены</h4>
+          <div class="loc-plans loc-drop">${plans.map(bigTile).join('') || '<p class="tile-hint">Перетащите сюда план справа</p>'}</div>
+          ${plans.length ? '<p class="tile-hint">Правая кнопка по плану: другая сцена, отвязать или удалить</p>' : ''}
         </div>
       </div></article>`;
   };
@@ -218,9 +209,19 @@ export function renderLocation(id) {
     <aside class="loc-side">
       <p class="sub">Заметки</p>
       <textarea class="loc-note" data-key="note" rows="5" placeholder="Контакты, доступ, электричество, парковка">${esc(l.note)}</textarea>
-      <p class="sub">Другие планы локации</p>
-      ${otherPlans.length ? `<div class="loc-plans">${otherPlans.map(tile).join('')}</div>` : '<p class="empty">Здесь планы этой локации без сцены.</p>'}
-      <div class="actions"><button class="act" data-act="new-plan">Новый план без сцены</button></div>
+      <p class="sub">Интерьер для мизансцен</p>
+      ${(() => {
+        const b = baseOf(p, l), mine = p.plans.filter(x => hasEnv(x) && locOfPlan(p, x) === l);
+        return `${b ? `<div class="loc-base"><span class="thumb">${planSVG({ name: '', objects: b.objects, wallColor: b.wallColor, floorColor: b.floorColor, phases: [] }, { pad: 0.8 })}</span>
+          <small>${baseCount(b)} предм. из плана «${esc(b.from || '')}». Новые мизансцены этой локации начинаются с этого интерьера.</small></div>`
+          : '<p class="empty">Пока нет: первый план локации со стенами или мебелью станет базой.</p>'}
+        ${mine.length ? `<select class="loc-link" data-act="set-base" aria-label="Взять интерьер из плана"><option value="">${b ? 'Заменить базу интерьером плана…' : 'Взять интерьер из плана…'}</option>
+          ${mine.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>` : ''}`;
+      })()}
+      <p class="sub">Планы локации без сцены</p>
+      ${otherPlans.length ? `<div class="loc-plans">${otherPlans.map(tile).join('')}</div>` : '<p class="empty">Нет.</p>'}
+      ${nobody.length ? `<p class="sub">Планы без сцены и локации</p><div class="loc-plans">${nobody.map(tile).join('')}</div>` : ''}
+      ${otherPlans.length || nobody.length ? '<p class="tile-hint">Перетащите план на сцену слева — он привяжется к сцене и к этой локации. Или правая кнопка → «В сцену».</p>' : ''}
       <div class="actions proj-danger"><button class="act danger" data-act="remove">Удалить локацию</button></div>
     </aside>
   </div>`;
@@ -260,6 +261,11 @@ view.addEventListener('change', e => {
     if (pl) { pl.sceneId = e.target.dataset.scene; pl.locationId = l.id; store.touch(); renderLocation(l.id); toast(`План «${pl.name}» привязан к сцене`); }
     return;
   }
+  if (e.target.dataset.act === 'set-base' && e.target.value) {
+    const pl = project().plans.find(x => x.id === e.target.value);
+    if (pl) { saveBase(l, pl); store.touch(); renderLocation(l.id); toast(`Интерьер плана «${pl.name}» стал базой локации`); }
+    return;
+  }
   if (e.target.dataset.act === 'link' && e.target.value) { l.sceneIds.push(e.target.value); store.touch(); renderLocation(l.id); }
 });
 view.addEventListener('keydown', e => {
@@ -294,7 +300,11 @@ view.addEventListener('click', async e => {
     store.touch(); renderLocation(l.id);
   }
   if (act === 'unlink') { l.sceneIds = l.sceneIds.filter(x => x !== b.dataset.scene); store.touch(); renderLocation(l.id); }
-  if (act === 'del-prop') { const id = b.closest('[data-prop]').dataset.prop; l.props = l.props.filter(x => x.id !== id); store.touch(); renderLocation(l.id); }
+  if (act === 'del-prop') {
+    const id = b.closest('[data-prop]').dataset.prop, x = l.props.find(q => q.id === id);
+    if (x && x.auto) { l.propsSkip = l.propsSkip || []; l.propsSkip.push(x.sceneId + '|' + x.text.toLowerCase()); }
+    l.props = l.props.filter(q => q.id !== id); store.touch(); renderLocation(l.id);
+  }
   if (act === 'new-plan') {
     const sid = b.dataset.scene || '', t = sid && sceneTitle(project(), sid);
     location.hash = `#/p/${project().id}/plan/${createPlan({ name: t ? `${l.name} (сц. ${t.n})` : l.name, objects: [], locationId: l.id, sceneId: sid })}`;
@@ -328,6 +338,38 @@ function removePhoto(l, ph) {
   return true;
 }
 
+// Реквизит из разбора сцены сам попадает в реквизит этой сцены на локации (кроме убранного вручную)
+function syncProps(p, l, linked) {
+  const info = sceneInfo(p), skip = new Set(l.propsSkip || []);
+  let added = 0;
+  for (const s of linked) {
+    const have = new Set(l.props.filter(x => x.sceneId === s.id || x.sceneId === '').map(x => x.text.toLowerCase()));
+    for (const t of sceneItems(p, s.id, info, false).props) {
+      const k = t.toLowerCase();
+      if (have.has(k) || skip.has(s.id + '|' + k)) continue;
+      l.props.push({ id: uid(), text: t, sceneId: s.id, ready: false, auto: true });
+      have.add(k); added++;
+    }
+  }
+  if (added) store.touch();
+}
+
+// планы перетаскиваются мышью на карточку сцены
+const unhot = () => { for (const x of view.querySelectorAll('.drop-hot')) x.classList.remove('drop-hot'); };
+const sceneAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest('.loc-sc[data-scene]'); };
+pointerDrag(view, {
+  pick(e) { const t = e.target.closest('.plan-tile[data-plan-open]'); return t ? { el: t, data: t.dataset.planOpen } : null; },
+  move(id, x, y) { unhot(); const c = sceneAt(x, y); if (c) c.classList.add('drop-hot'); },
+  drop(id, x, y) {
+    const c = sceneAt(x, y), p = project(), pl = p.plans.find(q => q.id === id);
+    if (!c || !pl || pl.sceneId === c.dataset.scene && pl.locationId === openId) return;
+    bindPlan(p, pl, c.dataset.scene, openId);
+    store.touch(); toast(`План «${pl.name}» — в сцене ${(sceneTitle(p, c.dataset.scene) || {}).n}`);
+  },
+  end() { unhot(); renderLocation(openId); },
+  scroller: () => view,
+});
+
 const ctx = $('#ctx');
 view.addEventListener('contextmenu', e => {
   const b = e.target.closest('[data-ph]');
@@ -360,8 +402,10 @@ ctx.addEventListener('click', e => {
 document.addEventListener('pointerdown', e => { if (ctx.dataset.kind === 'photo' && ctx.classList.contains('on') && !ctx.contains(e.target)) ctx.classList.remove('on'); }, true);
 addEventListener('keydown', e => { if (e.key === 'Escape' && ctx.dataset.kind === 'photo') ctx.classList.remove('on'); });
 
-// просмотр фото на весь экран: стрелки листают, Escape закрывает
-export function showPhoto(l, id) {
+// просмотр фото — в окошке справа: листается стрелками, закрывается крестиком или Escape
+export function showPhoto(l, id) { import('./split.js').then(m => m.openPhoto('loc', l.id, id)); }
+// прежний просмотр на весь экран (оставлен для совместимости)
+export function showPhotoFull(l, id) {
   let i = Math.max(0, l.photos.findIndex(x => x.id === id));
   const d = document.createElement('dialog');
   d.className = 'lightbox';
@@ -388,3 +432,36 @@ export function showPhoto(l, id) {
   document.body.append(d);
   d.showModal();
 }
+
+// ---------- исправить предмет: щелчок по ячейке ----------
+// Исправленное название уходит и в разбор сцены (для общего реквизита локации — во все её сцены).
+function renameProp(p, l, x, text) {
+  const old = x.text.trim().toLowerCase();
+  x.text = text;
+  const scenes = x.sceneId ? [x.sceneId] : l.sceneIds;
+  for (const it of p.breakdown || []) if (scenes.includes(it.sceneId) && it.text.trim().toLowerCase() === old) { it.text = text; it.auto = false; }
+  // убранное раньше под старым именем больше не мешает
+  if (l.propsSkip) l.propsSkip = l.propsSkip.filter(k => !scenes.some(sid => k === sid + '|' + old));
+}
+view.addEventListener('click', e => {
+  const t = e.target.closest('[data-lp-edit]');
+  if (!t || t.querySelector('input')) return;
+  const l = locOf(openId), chipEl = t.closest('[data-prop]'), x = l && l.props.find(q => q.id === chipEl.dataset.prop);
+  if (!x) return;
+  const inp = document.createElement('input');
+  inp.className = 'lp-edit'; inp.value = x.text; inp.setAttribute('aria-label', 'Предмет');
+  inp.style.width = Math.max(80, t.offsetWidth + 24) + 'px';
+  t.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const finish = save => {
+    if (done) return; done = true;
+    const v = inp.value.trim(), p = project();
+    if (save && v && v !== x.text) {
+      renameProp(p, l, x, v); store.touch();
+      toast('Исправлено и в разборе сцены');
+    }
+    renderLocation(l.id);
+  };
+  inp.addEventListener('keydown', k => { if (k.key === 'Enter') { k.preventDefault(); finish(true); } if (k.key === 'Escape') { k.preventDefault(); k.stopPropagation(); finish(false); } });
+  inp.addEventListener('blur', () => finish(true));
+});

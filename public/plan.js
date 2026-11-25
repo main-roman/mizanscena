@@ -1,4 +1,9 @@
 // Shot Designer: план сцены сверху и его 3D-вид. Работает с одним планом открытого проекта.
+import { absentIn } from './shapes.js';
+import { sceneInfo } from './breakdown.js';
+import { objectOf } from './schedmodel.js';
+import { pointerDrag } from './dragsort.js';
+import { ENV, hasEnv, locOfPlan, baseOf, saveBase, applyBase, baseCount } from './interior.js';
 import { store, $, $$, uid, esc, reduced, toast, replaceHash, download, safeName, storeImage, pickFile, printHTML, numbering, scenesOf, normalizePlan, SIZES, MOVES } from './store.js';
 import { storage, srcOf } from './storage.js';
 import { scrubField } from './ui.js';
@@ -25,7 +30,12 @@ const HINTS = {
 const LAYERS = { set: 'Обстановка', people: 'Люди', cameras: 'Камеры', light: 'Свет', moves: 'Движение между фазами', notes: 'Заметки', draw: 'Рисунки' };
 const layerOf = o => ({ character: 'people', camera: 'cameras', light: 'light', path: 'moves', text: 'notes', stroke: 'draw' }[o.type] || 'set');
 // у кого своя расстановка в каждой фазе: всё, что стоит на плане точкой (люди, камеры, свет, предметы)
-const PHASED = o => 'x' in o && !['door', 'window', 'image', 'text'].includes(o.type);
+const PHASED = o => 'x' in o && !['door', 'window', 'image', 'text'].includes(o.type) && (o.type !== 'furniture' || !!o.phased);
+// камеру и персонажа можно убрать только в этой фазе
+const CAN_ABSENT = o => o.type === 'camera' || o.type === 'character';
+const curPhaseId = () => scene.phases[scene.phase] ? scene.phases[scene.phase].id : '';
+const isAbsent = o => Array.isArray(o.absent) && o.absent.includes(curPhaseId());
+let hiddenCams = new Set(); // камеры, скрытые на время просмотра (в «Слоях» их можно вернуть)
 
 let active = false, scene = null, selId = null, tool = 'select', fresh = null, cat = 'main';
 let view = { x: 200, y: 120, k: 70 };
@@ -52,8 +62,12 @@ export function mountPlan(planId, focusId) {
   lastSnap = JSON.stringify(scene);
   if (!same) { undoStack = []; redoStack = []; selId = null; setTool('select'); if (v3) v3.setCamera(null); closeCtx(); }
   if (focusId && scene.objects.some(o => o.id === focusId)) selId = focusId;
+  const fc = focusId && scene.objects.find(o => o.id === focusId && o.type === 'camera');
+  hiddenCams = fc ? new Set(scene.objects.filter(o => o.type === 'camera' && o.id !== fc.id).map(o => o.id)) : new Set();
+  if (fc) setTimeout(() => toast('Остальные камеры скрыты — вернуть их можно в «Слоях»'), 400);
+  syncLayersBtn();
   if (!sel()) selId = null;
-  $('#scene-select').innerHTML = p.plans.map(s => `<option value="${s.id}"${s.id === scene.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
+  renderPlanPick();
   renderAll();
   if (!same) requestAnimationFrame(() => fitView(false));
   return true;
@@ -61,10 +75,41 @@ export function mountPlan(planId, focusId) {
 
 export function unmountPlan() { active = false; closeCtx(); }
 
+// Новый план сцены: если у другой сцены тот же объект и подобъект, окружение (стены, двери, окна, мебель,
+// подложка) переносится оттуда; камеры, персонажи и свет — нет.
+function environmentFor(sceneId) {
+  const p = project(), info = sceneInfo(p), me = info.find(x => x.id === sceneId);
+  if (!me) return null;
+  const key = s => { const o = objectOf(p, s); return (o.name + '|' + (o.sub || '')).toUpperCase(); }, k = key(me);
+  const src = p.plans.find(pl => { const s = info.find(x => x.id === pl.sceneId); return s && s.id !== sceneId && key(s) === k && pl.objects.some(o => o.type === 'wall' || o.type === 'furniture'); });
+  if (!src) return null;
+  const keep = src.objects.filter(o => !['camera', 'character', 'light', 'path'].includes(o.type)).map(o => ({ ...JSON.parse(JSON.stringify(o)), id: uid() }));
+  return { src, objects: keep };
+}
+
 export function createPlan(data) {
+  const p = project();
+  const loc = data && !(data.objects || []).length ? locOfPlan(p, { locationId: data.locationId || '', sceneId: data.sceneId || '' }) : null;
+  const base = loc && baseOf(p, loc);
+  if (base) {
+    data = { ...data, objects: [], locationId: data.locationId || loc.id };
+    const tmp = { objects: [], phases: [] };
+    applyBase(tmp, base);
+    data.objects = tmp.objects; data.wallColor = tmp.wallColor; data.floorColor = tmp.floorColor; data.wallHeight = tmp.wallHeight;
+    setTimeout(() => toast(`Интерьер взят из базы локации «${loc.name}»`), 300);
+  } else if (data && data.sceneId && !(data.objects || []).length) {
+    const env = environmentFor(data.sceneId);
+    if (env) {
+      data = { ...data, objects: env.objects, wallColor: env.src.wallColor, floorColor: env.src.floorColor, wallHeight: env.src.wallHeight, locationId: data.locationId || env.src.locationId || '' };
+      setTimeout(() => toast(`Окружение взято из плана «${env.src.name}»: тот же объект и подобъект`), 300);
+    }
+  }
   const plan = normalizePlan(data || { name: `План ${project().plans.length + 1}`, objects: [] });
   plan.id = 'plan-' + uid();
   project().plans.push(plan);
+  // первый план локации с обстановкой становится базой её интерьера
+  const l = locOfPlan(p, plan);
+  if (l && !l.interior && hasEnv(plan)) saveBase(l, plan);
   store.touch();
   return plan.id;
 }
@@ -80,7 +125,7 @@ function ensurePhases() {
 function storePhase() {
   const ph = scene.phases[scene.phase];
   ph.pos = {};
-  for (const o of scene.objects) if (PHASED(o)) ph.pos[o.id] = { x: o.x, y: o.y, rot: o.rot || 0 };
+  for (const o of scene.objects) if (PHASED(o)) ph.pos[o.id] = { x: o.x, y: o.y, rot: o.rot || 0, ...(o.type === 'camera' && o.lens ? { lens: o.lens } : {}) };
 }
 function loadPhase(i) {
   storePhase();
@@ -93,6 +138,9 @@ function renderPhases() {
   const btn = $('#phases-btn');
   btn.textContent = scene.phases.length > 1 ? `Фазы: ${scene.phase + 1} из ${scene.phases.length}` : 'Фазы';
   btn.classList.toggle('warn', scene.phases.length > 1);
+  // стрелки фаз видны, только когда фаз больше одной
+  $('#phase-prev').hidden = $('#phase-next').hidden = scene.phases.length < 2;
+  $('#phase-prev').disabled = scene.phase === 0; $('#phase-next').disabled = scene.phase >= scene.phases.length - 1;
   if (ctx.classList.contains('on') && ctx.dataset.kind === 'phases') ctx.innerHTML = phasesHTML();
 }
 function phasesHTML() {
@@ -140,6 +188,8 @@ ctx.addEventListener('click', e => {
     commit(); renderAll();
   }
 });
+$('#phase-prev').addEventListener('click', () => goPhase(Math.max(0, scene.phase - 1)));
+$('#phase-next').addEventListener('click', () => goPhase(Math.min(scene.phases.length - 1, scene.phase + 1)));
 $('#phases-btn').addEventListener('click', e => {
   if (ctx.classList.contains('on') && ctx.dataset.kind === 'phases') return closeCtx();
   const r = e.currentTarget.getBoundingClientRect();
@@ -289,8 +339,9 @@ function ghosts() {
 }
 
 function renderWorld() {
-  const visible = sorted(scene.objects).filter(o => layers[layerOf(o)]);
-  world.innerHTML = visible.map(o => drawObject(o, { scene, fresh: o.id === fresh })).join('') + ghosts() + placingPreview();
+  const gone = id => { const q = scene.objects.find(x => x.id === id); return q && (isAbsent(q) || (q.type === 'camera' && hiddenCams.has(q.id))); };
+  const visible = sorted(scene.objects).filter(o => layers[layerOf(o)] && !gone(o.id) && !(o.type === 'path' && gone(o.ownerId)));
+  world.innerHTML = visible.map(o => drawObject(o, { scene, fresh: o.id === fresh, cone: !['camera', 'light'].includes(o.type) || o.id === selId })).join('') + ghosts() + placingPreview();
   renderHandles();
   sync3d();
 }
@@ -421,7 +472,7 @@ $('#palette').addEventListener('click', async e => {
     return;
   }
   const b = e.target.closest('.tool');
-  if (!b) return;
+  if (!b || performance.now() < palQuiet) return;
   if (b.dataset.tool) setTool(b.dataset.tool);
   else if ('image' in b.dataset) addUnderlay();
   else addFromPalette(JSON.parse(b.dataset.add));
@@ -458,16 +509,62 @@ function addObject(o, at) {
   return obj;
 }
 
-function addFromPalette(o) {
+function addFromPalette(o, at) {
   setTool('select');
+  addObject(prepared(o), at);
+}
+// имя, цвет и прочее, что предмет получает, когда встаёт на план
+function prepared(o) {
   if (o.type === 'character') {
     const count = scene.objects.filter(q => q.type === 'character').length;
     o = { ...o, name: nextName('character', 'АБВГДЕЖЗИК'), color: COLORS[count % COLORS.length] };
   }
   if (o.type === 'camera') o = { ...o, name: nextName('camera', 'ABCDEFGH') };
   if (o.type === 'light' && emits(o.kind)) o = { ...o, color: LIGHTS[o.kind].color || LIGHT };
-  addObject(o);
+  return o;
 }
+// над планом вместо значка — сам предмет в настоящем размере и масштабе
+function palPreview(d, e) {
+  let g = $('#pal-prev', world);
+  const over = !!document.elementFromPoint(e.clientX, e.clientY)?.closest('#plan');
+  if (d.ghost) d.ghost.style.opacity = over ? '0' : '';
+  if (!over) { if (g) g.remove(); return; }
+  const w = toWorld(e), o = { id: 'pal-prev-o', rot: 0, ...d.obj, x: snap(w.x), y: snap(w.y) };
+  if (!g) { g = document.createElementNS('http://www.w3.org/2000/svg', 'g'); g.id = 'pal-prev'; g.setAttribute('pointer-events', 'none'); g.setAttribute('opacity', '0.8'); }
+  g.innerHTML = drawObject(o, { scene });
+  world.append(g);
+}
+// перетаскивание из палитры на план: копия значка едет за мышью, отпустили над планом — предмет встаёт туда
+let palDrag = null, palQuiet = 0;
+$('#palette').addEventListener('pointerdown', e => {
+  const b = e.target.closest('.tool[data-add]');
+  if (!b || e.button !== 0) return;
+  palDrag = { b, add: JSON.parse(b.dataset.add), sx: e.clientX, sy: e.clientY, ghost: null };
+  palDrag.obj = prepared(palDrag.add);
+});
+addEventListener('pointermove', e => {
+  if (!palDrag) return;
+  if (!palDrag.ghost) {
+    if (Math.hypot(e.clientX - palDrag.sx, e.clientY - palDrag.sy) < 6) return;
+    const g = palDrag.b.cloneNode(true);
+    g.className = 'tool pal-ghost';
+    document.body.append(g); palDrag.ghost = g;
+    document.body.classList.add('dragging-now');
+  }
+  palDrag.ghost.style.transform = `translate(${e.clientX - 26}px, ${e.clientY - 26}px)`;
+  svg.classList.toggle('pal-over', !!document.elementFromPoint(e.clientX, e.clientY)?.closest('#plan'));
+  palPreview(palDrag, e);
+});
+addEventListener('pointerup', e => {
+  if (!palDrag) return;
+  const d = palDrag; palDrag = null;
+  svg.classList.remove('pal-over');
+  if (!d.ghost) return; // это был щелчок — его обработает click
+  d.ghost.remove(); document.body.classList.remove('dragging-now');
+  const pv = $('#pal-prev', world); if (pv) pv.remove();
+  palQuiet = performance.now() + 250;
+  if (document.elementFromPoint(e.clientX, e.clientY)?.closest('#plan')) { const w = toWorld(e); setTool('select'); addObject(d.obj, { x: snap(w.x), y: snap(w.y) }); }
+});
 
 async function addUnderlay() {
   const file = await pickFile('image/*');
@@ -491,9 +588,16 @@ function select(id) {
   if (id && !isPhone()) showTab('object');
 }
 
-function removeSelected() {
+function removeSelected(all = false) {
   const o = sel();
   if (!o) return;
+  if (!all && CAN_ABSENT(o) && scene.phases.length > 1) {
+    o.absent = [...new Set([...(o.absent || []), curPhaseId()])];
+    if (scene.phases.every(ph => o.absent.includes(ph.id))) return removeSelected(true);
+    selId = null; closeCtx(); commit(); renderAll();
+    toast(`«${caption(o)}» убрана только в фазе «${scene.phases[scene.phase].name}». Вернуть — в «Слоях»`);
+    return;
+  }
   scene.objects = scene.objects.filter(q => q.id !== o.id && !(q.type === 'path' && q.ownerId === o.id));
   if (o.type === 'camera') project().shots.forEach(s => { if (s.cameraId === o.id) s.cameraId = ''; });
   selId = null;
@@ -903,11 +1007,11 @@ addEventListener('keydown', e => {
   else if (mod && e.code === 'KeyD') { e.preventDefault(); duplicateSelected(); }
   else if (key === 'delete' || key === 'backspace') { e.preventDefault(); removeSelected(); }
   else if (key === 'escape') { tool !== 'select' ? setTool('select') : select(null); }
-  else if (key.startsWith('arrow') && sel() && 'x' in sel()) {
+  // стрелки ← → (и PageUp / PageDown) — предыдущая и следующая фаза; предметы стрелками не двигаются
+  else if ((key === 'pageup' || key === 'pagedown' || key === 'arrowleft' || key === 'arrowright') && scene.phases.length > 1) {
     e.preventDefault();
-    const o = sel(), s = e.shiftKey ? 0.5 : 0.05;
-    moveTo(o, r2(o.x + (key === 'arrowleft' ? -s : key === 'arrowright' ? s : 0)), r2(o.y + (key === 'arrowup' ? -s : key === 'arrowdown' ? s : 0)));
-    commit(); renderWorld();
+    const back = key === 'pageup' || key === 'arrowleft';
+    goPhase(clamp(scene.phase + (back ? -1 : 1), 0, scene.phases.length - 1));
   }
 });
 
@@ -1037,6 +1141,7 @@ function refreshForms() {
 }
 
 function onFormInput(e) {
+  if (!active || !scene) return;
   const t = e.target;
   if (t.dataset.layer) { layers[t.dataset.layer] = t.checked; renderWorld(); syncLayersBtn(); return; }
   if (t.dataset.phaseName !== undefined) {
@@ -1079,7 +1184,7 @@ function onFormClick(e) {
 }
 for (const el of [$('#pane-object'), ctx]) {
   el.addEventListener('input', onFormInput);
-  el.addEventListener('change', () => commit());
+  el.addEventListener('change', () => { if (active && scene) commit(); }); // окошко #ctx общее с меню карточек в других разделах
   el.addEventListener('click', onFormClick);
 }
 
@@ -1103,7 +1208,9 @@ function openCtx(x, y, id) {
     + (o.type === 'light' && emits(o.kind) ? item('toggle', o.off ? 'Включить' : 'Выключить') : '')
     + (o.type === 'camera' ? item('look', 'Смотреть через эту камеру') : '')
     + item('settings', 'Настройки')
-    + item('dup', 'Дублировать') + item('del', 'Удалить')
+    + (o.type === 'furniture' ? item('phased', o.phased ? 'Стоит одинаково во всех фазах' : 'Двигается по фазам', o.phased ? 'вернуть одно место для всех фаз' : 'своё место в каждой фазе') : '')
+    + item('dup', 'Дублировать')
+    + (CAN_ABSENT(o) && scene.phases.length > 1 ? item('del', 'Убрать в этой фазе', `в «${scene.phases[scene.phase].name}»; в остальных останется`) + item('delall', 'Удалить из всех фаз') : item('del', 'Удалить'))
     + '</div>';
   placeCtx(x, y);
 }
@@ -1120,16 +1227,41 @@ ctx.addEventListener('click', async e => {
   if (act === 'settings') showTab('object', true);
   if (act === 'dup') duplicateSelected();
   if (act === 'del') removeSelected();
+  if (act === 'delall') removeSelected(true);
+  if (act === 'phased') {
+    o.phased = !o.phased;
+    // включили — во всех фазах встаёт туда, где стоит сейчас; выключили — тоже, одно место для всех
+    for (const ph of scene.phases) { if (o.phased) ph.pos[o.id] = { x: o.x, y: o.y, rot: o.rot || 0 }; else delete ph.pos[o.id]; }
+    commit(); renderAll();
+    toast(o.phased ? 'Теперь предмет можно переставлять по фазам: правая кнопка → «Движение к следующей фазе»' : 'Предмет стоит одинаково во всех фазах');
+  }
 });
 function openLayers(x, y) {
   ctx.dataset.kind = 'layers';
   ctx.innerHTML = `<h2>Слои</h2>${Object.entries(LAYERS).map(([k, name]) =>
     `<label class="field check"><input type="checkbox" data-layer="${k}" ${layers[k] ? 'checked' : ''}><span>${name}</span></label>`).join('')}
-    <p class="empty">Скрытый слой не виден на плане и не мешает выбирать остальное.</p>`;
+    ${cameras().length ? `<h3 class="ly-sub">Камеры</h3>${cameras().map(c => isAbsent(c)
+      ? `<div class="ly-absent"><span>${esc(caption(c))}<small>убрана в этой фазе</small></span><button class="linkbtn" data-unabsent="${c.id}">вернуть</button></div>`
+      : `<label class="field check"><input type="checkbox" data-cam="${c.id}" ${hiddenCams.has(c.id) ? '' : 'checked'}><span>${esc(caption(c))}</span></label>`).join('')}` : ''}
+    ${scene.objects.filter(o => o.type === 'character' && isAbsent(o)).map(o => `<div class="ly-absent"><span>${esc(caption(o))}<small>убран в этой фазе</small></span><button class="linkbtn" data-unabsent="${o.id}">вернуть</button></div>`).join('')}
+    <p class="empty">Скрытый слой или камера не видны на плане и не мешают выбирать остальное.</p>`;
   placeCtx(x, y);
 }
 function closeCtx() { ctx.classList.remove('on'); }
-function syncLayersBtn() { $('#layers-btn').classList.toggle('warn', Object.values(layers).some(v => !v)); }
+function syncLayersBtn() { $('#layers-btn').classList.toggle('warn', Object.values(layers).some(v => !v) || hiddenCams.size > 0); }
+ctx.addEventListener('change', e => {
+  const t = e.target;
+  if (ctx.dataset.kind !== 'layers' || !t.dataset.cam) return;
+  if (t.checked) hiddenCams.delete(t.dataset.cam); else hiddenCams.add(t.dataset.cam);
+  renderWorld(); syncLayersBtn();
+});
+ctx.addEventListener('click', e => {
+  const b = e.target.closest('[data-unabsent]');
+  if (!b || ctx.dataset.kind !== 'layers') return;
+  const o = scene.objects.find(q => q.id === b.dataset.unabsent);
+  if (o) { o.absent = (o.absent || []).filter(id => id !== curPhaseId()); commit(); renderAll(); }
+  const r = $('#layers-btn').getBoundingClientRect(); openLayers(r.left - 6, r.bottom);
+});
 document.addEventListener('pointerdown', e => {
   if (ctx.classList.contains('on') && !ctx.contains(e.target) && !e.target.closest('#layers-btn, #phases-btn')) closeCtx();
 }, true);
@@ -1151,24 +1283,23 @@ const ICON = {
 
 function renderShots() {
   const el = $('#pane-shots'), cams = cameras(), shots = planShots(), nums = numbering(project()), many = scene.phases.length > 1;
-  const list = shots.map((s, i) => `<li class="shot${s.cameraId && s.cameraId === selId ? ' hot' : ''}" data-id="${s.id}">
-    <button class="num" data-act="go" title="Показать камеру на плане">${nums.get(s.id)}</button>
-    <select data-key="cameraId" class="wide" aria-label="Камера"><option value="">Камера не выбрана</option>${cams.map(c =>
-      `<option value="${c.id}"${c.id === s.cameraId ? ' selected' : ''}>${esc(caption(c))}</option>`).join('')}</select>
-    ${many ? `<select data-key="phaseId" class="wide" aria-label="Фаза"><option value="">Фаза не указана</option>${scene.phases.map(ph =>
-      `<option value="${ph.id}"${ph.id === s.phaseId ? ' selected' : ''}>${esc(ph.name)}</option>`).join('')}</select>` : ''}
-    <select data-key="size" aria-label="Крупность">${SIZES.map(v => `<option${v === s.size ? ' selected' : ''}>${v}</option>`).join('')}</select>
-    <select data-key="move" aria-label="Движение камеры">${MOVES.map(v => `<option${v === s.move ? ' selected' : ''}>${v}</option>`).join('')}</select>
-    <textarea data-key="content" placeholder="Что происходит в кадре">${esc(s.content)}</textarea>
-    <div class="shot-tools">
-      <button class="ico" data-act="up" aria-label="Выше" title="Выше"${i ? '' : ' disabled'}>${ICON.up}</button>
-      <button class="ico" data-act="down" aria-label="Ниже" title="Ниже"${i < shots.length - 1 ? '' : ' disabled'}>${ICON.down}</button>
-      <button class="ico" data-act="del" aria-label="Убрать кадр" title="Убрать кадр">${ICON.del}</button>
-    </div></li>`).join('');
+  const list = shots.map(s => `<li class="shot${s.cameraId && s.cameraId === selId ? ' hot' : ''}" data-id="${s.id}">
+    <div class="shot-top"><span class="shot-grip" title="Перетащите, чтобы поменять порядок">⋮⋮</span>
+      <button class="num" data-act="go" title="Показать камеру на плане">${nums.get(s.id)}</button>
+      <button class="ico" data-act="del" aria-label="Убрать кадр" title="Убрать кадр">${ICON.del}</button></div>
+    <div class="shot-grid">
+      <label><span>Камера</span><select data-key="cameraId" aria-label="Камера"><option value="">—</option>${cams.map(c =>
+        `<option value="${c.id}"${c.id === s.cameraId ? ' selected' : ''}>${esc(caption(c))}</option>`).join('')}</select></label>
+      ${many ? `<label><span>Фаза</span><select data-key="phaseId" aria-label="Фаза"><option value="">—</option>${scene.phases.map(ph =>
+        `<option value="${ph.id}"${ph.id === s.phaseId ? ' selected' : ''}>${esc(ph.name)}</option>`).join('')}</select></label>` : ''}
+      <label><span>Крупность</span><select data-key="size" aria-label="Крупность"><option value=""${s.size ? '' : ' selected'}>—</option>${SIZES.map(v => `<option${v === s.size ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label><span>Движение, техника</span><input data-key="move" list="pl-moves" value="${esc(s.move)}" aria-label="Движение камеры и техника"></label>
+    </div>
+    <textarea data-key="content" placeholder="Что происходит в кадре">${esc(s.content)}</textarea></li>`).join('');
   const empty = shots.length ? '' : `<p class="empty">${cams.length
     ? 'Кадров на этом плане пока нет. Добавьте первый и выберите для него камеру.'
     : 'Поставьте на план камеру, потом добавляйте кадры. Они сразу появятся в режиссёрском сценарии.'}</p>`;
-  el.innerHTML = `<h2>Кадры на этом плане</h2>${empty}<ul class="shots">${list}</ul><div class="actions"><button class="act main" id="add-shot">Добавить кадр</button></div>`;
+  el.innerHTML = `<h2>Кадры на этом плане</h2>${empty}<ul class="shots">${list}</ul><datalist id="pl-moves">${MOVES.map(v => `<option value="${v}">`).join('')}</datalist><div class="actions"><button class="act main" id="add-shot">Добавить кадр</button></div>`;
 }
 
 $('#pane-shots').addEventListener('click', e => {
@@ -1179,15 +1310,16 @@ $('#pane-shots').addEventListener('click', e => {
     const cur = sel(), cams = cameras();
     all.push({ id: uid(), sceneId: scene.sceneId || '', planId: scene.id, cameraId: cur && cur.type === 'camera' ? cur.id : (cams[0] || {}).id || '',
       phaseId: scene.phases.length > 1 ? scene.phases[scene.phase].id : '',
-      size: SIZES[2], move: MOVES[0], content: '', note: '', mode: '', dur: '', chars: '', props: '', tech: '', frame: '' });
+      size: '', move: '', content: '', note: '', mode: '', dur: '', chars: '', props: '', tech: '', frame: '' });
     store.touch(); renderShots();
     const last = $('#pane-shots .shot:last-child textarea');
     last.scrollIntoView({ block: 'nearest', behavior: reduced.matches ? 'auto' : 'smooth' });
     last.focus({ preventScroll: true });
     return;
   }
-  const li = b.closest('.shot'), s = all.find(x => x.id === li.dataset.id), mine = planShots(), i = mine.indexOf(s);
-  const swap = (a, c) => { const ia = all.indexOf(a), ic = all.indexOf(c); [all[ia], all[ic]] = [all[ic], all[ia]]; };
+  const li = b.closest('.shot');
+  if (!li) return;
+  const s = all.find(x => x.id === li.dataset.id);
   if (b.dataset.act === 'go' && s.cameraId) {
     const pi = scene.phases.findIndex(ph => ph.id === s.phaseId);
     if (pi >= 0 && pi !== scene.phase) { loadPhase(pi); commit(); renderAll(); }
@@ -1197,14 +1329,37 @@ $('#pane-shots').addEventListener('click', e => {
     if (!confirm('Убрать этот кадр? Он исчезнет и из режиссёрского сценария.')) return;
     all.splice(all.indexOf(s), 1); store.touch(); renderShots();
   }
-  if (b.dataset.act === 'up' && i > 0) { swap(s, mine[i - 1]); store.touch(); renderShots(); }
-  if (b.dataset.act === 'down' && i < mine.length - 1) { swap(s, mine[i + 1]); store.touch(); renderShots(); }
 });
 $('#pane-shots').addEventListener('input', e => {
   const li = e.target.closest('.shot'), key = e.target.dataset.key;
-  if (!li || !key) return;
+  if (!li || !key || e.target.matches('select')) return;
   project().shots.find(x => x.id === li.dataset.id)[key] = e.target.value;
   store.touch();
+});
+$('#pane-shots').addEventListener('change', e => {
+  const li = e.target.closest('.shot'), key = e.target.dataset.key;
+  if (!li || !key || !e.target.matches('select')) return;
+  project().shots.find(x => x.id === li.dataset.id)[key] = e.target.value;
+  store.touch();
+});
+// порядок кадров — перетаскиванием карточки за ручку; он общий с режиссёрским сценарием
+pointerDrag($('#pane-shots'), {
+  pick(e) { const g = e.target.closest('.shot-grip'); return g ? { el: g.closest('.shot'), data: g.closest('.shot').dataset.id } : null; },
+  move(id, x, y) {
+    for (const c of $$('#pane-shots .drop-before, #pane-shots .drop-after')) c.classList.remove('drop-before', 'drop-after');
+    const t = [...$$('#pane-shots .shot:not(.drag-src)')].find(c => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    if (t) t.classList.add('drop-before'); else $$('#pane-shots .shot:not(.drag-src)').at(-1)?.classList.add('drop-after');
+  },
+  drop(id, x, y) {
+    const all = project().shots, s = all.find(q => q.id === id);
+    const t = [...$$('#pane-shots .shot:not(.drag-src)')].find(c => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; });
+    all.splice(all.indexOf(s), 1);
+    const o = t && all.find(q => q.id === t.dataset.id);
+    if (o) all.splice(all.indexOf(o), 0, s);
+    else { const mine = all.filter(q => q.planId === scene.id); all.splice(mine.length ? all.indexOf(mine[mine.length - 1]) + 1 : all.length, 0, s); }
+    store.touch();
+  },
+  end() { renderShots(); },
 });
 
 // ---------- панель: план ----------
@@ -1212,16 +1367,17 @@ $('#pane-shots').addEventListener('input', e => {
 function renderPlanPane() {
   renderLocChip();
   const locked = scene.objects.filter(o => o.type === 'image' && o.locked);
-  const scenes = scenesOf(project());
+  const scenes = scenesOf(project()), loc = locOfPlan(project(), scene), base = loc ? baseOf(project(), loc, scene.id) : null;
   $('#pane-scene').innerHTML = `
-    <label class="field"><span>Название плана</span><input type="text" data-key="name" value="${esc(scene.name)}"></label>
-    <label class="field"><span>Сцена из сценария</span><select data-key="sceneId"><option value="">Не привязан</option>${scenes.map((s, i) =>
+    <div class="field"><span class="field-head">Сцена из сценария${scene.sceneId && scenes.some(s => s.id === scene.sceneId) ? `<button class="mini-ico" data-scene-open="${scene.sceneId}" title="Открыть текст и разбор сцены рядом" aria-label="Открыть сцену рядом"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/></svg></button>` : ''}</span><select data-key="sceneId" aria-label="Сцена из сценария"><option value="">Не привязан</option>${scenes.map((s, i) =>
       `<option value="${s.id}"${s.id === scene.sceneId ? ' selected' : ''}>${i + 1}. ${esc(s.text)}</option>`).join('')}</select>
-      <small>${scenes.length ? 'Новые кадры этого плана попадут в эту сцену режиссёрского сценария.' : 'Сцены появятся здесь, когда в сценарии будут строки «Время и место».'}</small></label>
-    ${scene.sceneId && scenes.some(s => s.id === scene.sceneId) ? `<div class="actions plan-scene-btn"><button class="act" data-scene-open="${scene.sceneId}">Показать сцену рядом</button></div>` : ''}
-    ${project().locations.length ? `<label class="field"><span>Локация</span><select data-key="locationId"><option value="">Не выбрана</option>${project().locations.map(l =>
-      `<option value="${l.id}"${l.id === scene.locationId ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select></label>
-      ${scene.locationId && project().locations.some(l => l.id === scene.locationId) ? `<div class="actions plan-scene-btn"><button class="act" data-loc-open="${scene.locationId}">Показать локацию рядом</button></div>` : ''}` : ''}
+      <small>${scenes.length ? 'Новые кадры этого плана попадут в эту сцену режиссёрского сценария.' : 'Сцены появятся здесь, когда в сценарии будут строки «Время и место».'}</small></div>
+    ${project().locations.length ? `<div class="field"><span class="field-head">Локация${loc ? `<button class="mini-ico" data-loc-open="${loc.id}" title="Открыть локацию рядом: фото, адрес, реквизит" aria-label="Открыть локацию рядом"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg></button>` : ''}</span><select data-key="locationId" aria-label="Локация"><option value="">Не выбрана</option>${project().locations.map(l =>
+      `<option value="${l.id}"${l.id === scene.locationId ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select></div>
+      ${loc ? `<div class="interior">
+        <small>${base ? `Интерьер локации: ${baseCount(base)} предм. из плана «${esc(base.from || '')}»` : 'У локации ещё нет базового интерьера'}</small>
+        <div class="actions two"><button class="act" data-act="base-restore"${base ? '' : ' disabled'} title="Заменить стены, двери, окна и мебель этого плана интерьером локации. Камеры, люди и свет останутся">Восстановить интерьер</button>
+        <button class="act" data-act="base-save"${hasEnv(scene) ? '' : ' disabled'} title="Стены, двери, окна и мебель этого плана станут интерьером локации для новых мизансцен">Сохранить как базу</button></div></div>` : ''}` : ''}
     ${scrubField('wallHeight', 'Высота стен в 3D, м', scene.wallHeight ?? 2.7, { step: 0.05, min: 0.3, max: 12 })}
     <div class="pair"><label class="field"><span>Цвет стен</span><input type="color" data-key="wallColor" value="${scene.wallColor || '#E8E4DC'}"></label>
     <label class="field"><span>Цвет пола</span><input type="color" data-key="floorColor" value="${scene.floorColor || '#FFFFFF'}"></label></div>
@@ -1249,13 +1405,36 @@ $('#pane-scene').addEventListener('input', e => {
 });
 $('#pane-scene').addEventListener('change', e => {
   commit();
-  if (e.target.dataset.key === 'name') $('#scene-select').selectedOptions[0].textContent = scene.name;
-  if (e.target.dataset.key === 'sceneId' || e.target.dataset.key === 'locationId') renderPlanPane();
+  const k = e.target.dataset.key;
+  if (k === 'sceneId' || k === 'locationId') {
+    // сцена без выбранной локации — берём локацию сцены
+    const p = project();
+    if (k === 'sceneId' && !scene.locationId) { const l = p.locations.find(x => x.sceneIds.includes(scene.sceneId)); if (l) scene.locationId = l.id; }
+    const l = locOfPlan(p, scene);
+    if (l) {
+      const base = baseOf(p, l, scene.id);
+      if (base && !hasEnv(scene)) { applyBase(scene, base); commit(); renderAll(); toast(`Интерьер локации «${l.name}» восстановлен`); }
+      else if (!base && hasEnv(scene)) { saveBase(l, scene); store.touch(); toast(`Интерьер этого плана стал базой локации «${l.name}»`); }
+    }
+    renderPlanPane(); renderPlanPick();
+  }
 });
 $('#pane-scene').addEventListener('click', async e => {
   const act = (e.target.closest('button') || {}).dataset?.act;
   if (!act) return;
   if (act === 'jpg' || act === 'png' || act === 'pdf') exportPlan(scene, act);
+  if (act === 'base-restore' || act === 'base-save') {
+    const p = project(), l = locOfPlan(p, scene), base = l && baseOf(p, l, scene.id);
+    if (!l) return;
+    if (act === 'base-restore' && base) {
+      if (hasEnv(scene) && !confirm('Заменить стены, двери, окна и мебель этого плана интерьером локации? Камеры, люди и свет останутся. Отменить можно через Ctrl+Z.')) return;
+      applyBase(scene, base); commit(); renderAll(); toast(`Интерьер локации «${l.name}» восстановлен`);
+    }
+    if (act === 'base-save') {
+      if (l.interior && !confirm(`Сделать интерьер этого плана базой локации «${l.name}»? Прежняя база (из плана «${l.interior.from}») заменится; уже сделанные планы не изменятся.`)) return;
+      saveBase(l, scene); store.touch(); renderPlanPane(); toast(`Интерьер сохранён как база локации «${l.name}»`);
+    }
+  }
   if (act === 'copy') { const c = JSON.parse(JSON.stringify(scene)); c.name += ', копия'; goto(createPlan(c)); toast('Создана копия плана'); }
   if (act === 'unlock') { scene.objects.forEach(o => { if (o.type === 'image') o.locked = false; }); commit(); renderAll(); toast('Подложку снова можно двигать'); }
   if (act === 'remove') {
@@ -1359,7 +1538,7 @@ $('#cam-bar').addEventListener('click', async e => {
   if (s.frame && !confirm(`У кадра ${n} уже есть картинка в раскадровке. Заменить её?`)) return;
   try {
     const blob = await v3.snapshot();
-    s.frame = await storage.putAsset(`frame-${Date.now().toString(36)}${uid()}.jpg`, blob, store.project.id);
+    s.frames = [await storage.putAsset(`frame-${Date.now().toString(36)}${uid()}.jpg`, blob, store.project.id), ...(Array.isArray(s.frames) ? s.frames.slice(1) : [])]; s.frame = s.frames[0];
     store.touch();
     renderCamBar();
     toast(`Кадр ${n} добавлен в раскадровку режиссёрского сценария`);
@@ -1368,7 +1547,57 @@ $('#cam-bar').addEventListener('click', async e => {
 
 // ---------- верхняя полоса плана ----------
 
-$('#scene-select').addEventListener('change', e => goto(e.target.value));
+// Кнопка текущего плана открывает список планов проекта: название, сцена и локация каждого.
+// Щелчок по уже открытому плану в списке — переименовать его.
+function planSub(p, pl) {
+  const scenes = scenesOf(p), i = scenes.findIndex(s => s.id === pl.sceneId), l = locOfPlan(p, pl);
+  return [i >= 0 ? `сц. ${i + 1}` : 'без сцены', l ? l.name : ''].filter(Boolean).join(' · ');
+}
+function renderPlanPick() {
+  if (!scene) return;
+  $('#plan-cur-name').textContent = scene.name;
+  $('#plan-cur-sub').textContent = planSub(project(), scene);
+  const m = $('#plan-menu');
+  if (m.classList.contains('on')) m.innerHTML = planMenuHTML();
+}
+function planMenuHTML() {
+  const p = project();
+  return `<ul class="pm-list">${p.plans.map(pl => `<li><button class="pm-item${pl.id === scene.id ? ' on' : ''}" data-pm="${pl.id}" title="${pl.id === scene.id ? 'Щёлкните, чтобы переименовать' : 'Открыть план'}">
+      <b>${esc(pl.name)}</b><small>${esc(planSub(p, pl))}</small></button></li>`).join('')}</ul>
+    <button class="pm-new" data-pm-new><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Новый план</button>`;
+}
+function closePlanMenu() { $('#plan-menu').classList.remove('on'); $('#plan-cur').setAttribute('aria-expanded', 'false'); }
+$('#plan-cur').addEventListener('click', e => {
+  e.stopPropagation();
+  const m = $('#plan-menu');
+  if (m.classList.contains('on')) return closePlanMenu();
+  m.innerHTML = planMenuHTML();
+  const r = $('#plan-cur').getBoundingClientRect();
+  m.style.left = Math.max(8, r.left) + 'px'; m.style.top = r.bottom + 6 + 'px';
+  m.classList.add('on'); $('#plan-cur').setAttribute('aria-expanded', 'true');
+});
+$('#plan-menu').addEventListener('click', e => {
+  e.stopPropagation();
+  if (e.target.closest('[data-pm-new]')) { closePlanMenu(); goto(createPlan()); return; }
+  const b = e.target.closest('[data-pm]');
+  if (!b || b.querySelector('input')) return;
+  if (b.dataset.pm !== scene.id) { closePlanMenu(); goto(b.dataset.pm); return; }
+  // переименование текущего плана прямо в списке
+  const name = b.querySelector('b'), inp = document.createElement('input');
+  inp.value = scene.name; inp.className = 'pm-rename'; inp.setAttribute('aria-label', 'Название плана');
+  name.replaceWith(inp); inp.focus(); inp.select();
+  const done = save => {
+    if (!inp.isConnected) return;
+    const v = inp.value.trim();
+    if (save && v && v !== scene.name) { scene.name = v; commit(); }
+    renderPlanPick();
+  };
+  inp.addEventListener('keydown', k => { if (k.key === 'Enter') { k.preventDefault(); done(true); } if (k.key === 'Escape') { k.stopPropagation(); done(false); } });
+  inp.addEventListener('blur', () => done(true));
+});
+document.addEventListener('click', e => { if (!e.target.closest('#plan-menu, #plan-cur')) closePlanMenu(); });
+addEventListener('keydown', e => { if (e.key === 'Escape' && $('#plan-menu').classList.contains('on')) closePlanMenu(); });
+addEventListener('hashchange', closePlanMenu);
 $('#new-scene').addEventListener('click', () => goto(createPlan()));
 new ResizeObserver(() => active && scene && renderView()).observe(svg);
 buildPalette();

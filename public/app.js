@@ -1,7 +1,8 @@
 // Точка входа: переходы между экранами, список проектов и страница проекта.
 import { shiftNo, DAY_KINDS } from './schedmodel.js';
+import { renderFrames } from './frames.js';
 import { storage } from './storage.js';
-import { store, $, $$, esc, toast, pickFile, createProject, copyToCloud, exportProjectFile, importProjectFile, normalizeProject, coverOf } from './store.js';
+import { store, $, $$, esc, toast, uid, pickFile, createProject, copyToCloud, exportProjectFile, importProjectFile, normalizeProject, coverOf } from './store.js';
 import { srcOf } from './storage.js';
 import { cloud, isCloud } from './cloud.js';
 import { ask } from './ui.js';
@@ -15,6 +16,7 @@ import { mountCallsheet } from './callsheet.js';
 import { mountCrew } from './crew.js';
 import { exportKPP } from './kppexport.js';
 import './tilemenu.js';
+import './combo.js';
 import { sceneInfo, eighthsText } from './breakdown.js';
 import { openScene, openLocation, openPlan, closeSplit, refreshSplit } from './split.js';
 import { mountDirector, unmountDirector, printDirector, csvDirector, totalSeconds, clock } from './director.js';
@@ -93,11 +95,14 @@ async function route(remote = false) {
     unmountDirector();
     mountDirector($('#view-director'));
   } else if (sub === 'plan' && p.plans.some(x => x.id === parts[3])) {
-    show('plan', 'Shot Designer', base + '/plans');
+    show('plan', 'План', base + '/plans');
     mountPlan(parts[3], parts[4]);
   } else if (sub === 'plans') {
-    show('plans', 'Shot Designer', base);
-    renderPlans();
+    // «Кадры»: список сцен, а с id сцены — её раскадровка
+    const sc = parts[3] && parts[3] !== 'none' ? sceneTitle(p, parts[3]) : null;
+    if (parts[3]) show('plans', sc ? `Кадры · сцена ${sc.n}` : 'Кадры без сцены', base + '/plans');
+    else show('plans', 'Кадры', base);
+    renderFrames(parts[3] && (sc || parts[3] === 'none') ? parts[3] : '');
   } else if (sub === 'scenes') {
     show('scenes', 'Сцены и разбор', base);
     renderScenes();
@@ -267,6 +272,19 @@ ctxEl.addEventListener('click', async e => {
 document.addEventListener('pointerdown', e => { if (ctxEl.dataset.kind === 'proj' && ctxEl.classList.contains('on') && !ctxEl.contains(e.target)) ctxEl.classList.remove('on'); }, true);
 addEventListener('keydown', e => { if (e.key === 'Escape' && ctxEl.dataset.kind === 'proj') ctxEl.classList.remove('on'); });
 
+// Ctrl+Z — отменить последнее действие, Ctrl+Y или Ctrl+Shift+Z — вернуть. В полях ввода и в тексте сценария
+// работает обычная отмена набора; в мизансцене — своя отмена плана.
+addEventListener('keydown', e => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod || !store.project || !['KeyZ', 'KeyY'].includes(e.code)) return;
+  if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (document.body.dataset.view === 'plan' || document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  const back = e.code === 'KeyZ' && !e.shiftKey;
+  if (back ? store.undo() : store.redo()) { route(true); refreshSplit(); toast(back ? 'Отменено' : 'Возвращено'); }
+  else toast(back ? 'Отменять нечего' : 'Возвращать нечего');
+});
+
 // ---------- подключение ИИ-помощника (MCP) ----------
 
 function showAI() {
@@ -283,7 +301,7 @@ function showAI() {
   const d = document.createElement('dialog');
   d.className = 'ask ai';
   d.innerHTML = `<form method="dialog"><h3>Подключить ИИ-помощника</h3>
-    <p class="ask-text">MCP — это способ дать ИИ-помощнику (Claude, ChatGPT, Cursor и другим) доступ к программе. После подключения вы пишете помощнику обычными словами, а он сам читает и правит ваши проекты: сценарий, разбор сцен, режиссёрский сценарий, локации и планы Shot Designer. Правки сразу видны здесь.
+    <p class="ask-text">MCP — это способ дать ИИ-помощнику (Claude, ChatGPT, Cursor и другим) доступ к программе. После подключения вы пишете помощнику обычными словами, а он сам читает и правит ваши проекты: сценарий, разбор сцен, режиссёрский сценарий, локации, планы мизансцены и раскадровку. Правки сразу видны здесь.
     Мизансцена должна быть открыта; облачные проекты видны, если вы вошли в облако.</p>
     <section class="ai-block"><h4>Что попросить</h4>
       <ul class="ai-asks"><li>«Сделай разбор сцены 5 в Птичке по графам»</li><li>«Разбери весь сценарий по графам, как для КПП»</li><li>«Проверь разбор: что пропущено и что названо по-разному»</li><li>«Расставь на плане кухни маму у плиты и камеру на 35 мм»</li></ul>
@@ -304,10 +322,19 @@ function showAI() {
 
 // ---------- страница проекта ----------
 
+// окошко с итогом: строки текста и одна кнопка
+function report(title, lines) {
+  const d = document.createElement('dialog');
+  d.className = 'ask';
+  d.innerHTML = `<form method="dialog"><h3>${esc(title)}</h3>${lines.map(l => `<p class="ask-text">${esc(l)}</p>`).join('')}<div class="ask-row"><button class="act main" value="ok">Понятно</button></div></form>`;
+  d.addEventListener('close', () => { d.classList.add('out'); setTimeout(() => d.remove(), 200); });
+  document.body.append(d);
+  d.showModal();
+}
+
 function renderProject() {
   const p = store.project, base = `#/p/${p.id}`;
   const st = scriptStats(p), hasText = p.script.blocks.some(b => b.text.trim()), sec = totalSeconds(p);
-  const covers = p.locations.filter(l => l.photos.length).slice(0, 4);
   $('#view-project').innerHTML = `<div class="proj">
     <input class="proj-name" id="proj-name" value="${esc(p.name)}" aria-label="Название проекта" spellcheck="false">
     <div class="proj-list">
@@ -321,17 +348,19 @@ function renderProject() {
         <span class="sect-d">${(() => { const n = p.schedule.info.crew.filter(r => r.name).length, a = p.schedule.cast.filter(c => c.actor).length; return n || a ? `${a ? plural(a, 'актёр', 'актёра', 'актёров') : ''}${a && n ? ', ' : ''}${n ? plural(n, 'человек', 'человека', 'человек') + ' в группе' : ''}: контакты по цехам` : 'Актёры и съёмочная группа по цехам: должности, телефоны, почта'; })()}</span></a>
       <a class="sect" href="${base}/director"><span class="sect-n">Режиссёрский сценарий</span>
         <span class="sect-d">${p.shots.length ? plural(p.shots.length, 'кадр', 'кадра', 'кадров') + (sec ? `, хронометраж ${clock(sec)}` : '') : 'Таблица кадров по сценам: содержание, персонажи, реквизит, техника'}</span></a>
-      <a class="sect sect-pics" href="${base}/plans"><span class="sect-n">Shot Designer</span>
-        <span class="sect-d">${p.plans.length ? plural(p.plans.length, 'план', 'плана', 'планов') + ': мизансцена, камера, свет' : 'Планы сверху: мизансцена, камера, свет'}</span>
-        ${p.plans.length ? `<span class="sect-strip">${p.plans.slice(0, 4).map(x => `<span class="thumb">${planSVG(x, { pad: 0.8 })}</span>`).join('')}</span>` : ''}</a>
-      <a class="sect sect-pics" href="${base}/locations"><span class="sect-n">Локации</span>
+      <a class="sect" href="${base}/plans"><span class="sect-n">Кадры</span>
+        <span class="sect-d">${(() => { const pics = p.shots.filter(s => s.frame).length; return p.plans.length || pics ? [p.plans.length ? plural(p.plans.length, 'план', 'плана', 'планов') + ' мизансцены' : '', pics ? plural(pics, 'картинка', 'картинки', 'картинок') + ' раскадровки' : ''].filter(Boolean).join(', ') : 'По сценам: планы мизансцены и раскадровка'; })()}</span>
+</a>
+      <a class="sect" href="${base}/locations"><span class="sect-n">Локации</span>
         <span class="sect-d">${p.locations.length ? plural(p.locations.length, 'локация', 'локации', 'локаций') + ': фото, адреса, сцены, постановочный реквизит' : 'Фото мест съёмки, адреса, сцены и постановочный реквизит'}</span>
-        ${covers.length ? `<span class="sect-strip">${covers.map(l => `<span class="thumb"><img src="${esc(srcOf(l.photos[0].src))}" alt="" loading="lazy"></span>`).join('')}</span>` : ''}</a>
+</a>
     </div>
     <div class="proj-side">
+      ${hasText ? `<div class="analyze-box"><button class="act main" data-act="analyze-script">Анализ сценария</button>
+        <p class="where">Сам заполнит всё, что можно без человека: разбор сцен по графам, локации для каждого места, персонажей в группе. Сцены сразу появятся на столе КПП. Уже вписанное не трогает.</p></div>` : ''}
       <p class="sub">Проект</p>
       <div class="actions">
-        <button class="act main" data-act="file">Сохранить проект в файл</button>
+        <button class="act" data-act="file">Сохранить проект в файл</button>
         <button class="act" data-act="import-script">Загрузить сценарий: Word, PDF, Fountain</button>
       </div>
       <p class="where">${isCloud(p.id) ? 'Проект в облаке: сохраняется сам и открывается на всех ваших устройствах.' : 'Проект сохраняется сам после каждой правки. Файл .mizproj нужен, чтобы перенести проект на другое устройство или сделать копию.'}</p>
@@ -393,6 +422,26 @@ $('#view-project').addEventListener('click', async e => {
   }
   const act = (e.target.closest('button') || {}).dataset?.act;
   if (!act) return;
+  if (act === 'analyze-script') {
+    const { applyAnalysis, ensureLocations } = await import('./breakdown.js');
+    const { castList } = await import('./schedmodel.js');
+    const info = sceneInfo(p), ids = info.map(x => x.id);
+    const found = applyAnalysis(p, ids, uid), locs = ensureLocations(p, ids, uid);
+    // персонажи сценария — строками в группе (актёра вписывает человек)
+    let chars = 0;
+    for (const c of castList(p, info)) if (!p.schedule.cast.some(r => r.char.toUpperCase() === c.char)) { p.schedule.cast.push({ id: uid(), char: c.char, actor: '', phone: '', busy: [], makeupMin: 0, costumeMin: 0, carMin: 0 }); chars++; }
+    const free = info.filter(x => !p.schedule.days.some(d => d.items.some(i => i.sceneId === x.id))).length;
+    store.touch(); renderProject();
+    report('Анализ сценария', [
+      `Сцен: ${info.length}.`,
+      found ? `В разбор добавлено пунктов: ${found}.` : 'Нового в разборе не нашлось.',
+      locs ? `Новых локаций: ${locs}.` : 'Все места уже есть в локациях.',
+      chars ? `Персонажей добавлено в группу: ${chars}.` : 'Все персонажи уже в группе.',
+      free ? `На столе КПП ждут раскладки сцен: ${free}.` : 'Все сцены уже стоят по дням КПП.',
+      'Дальше — проверить разбор, вписать адреса локаций и актёров. Раскладку по дням удобно поручить ИИ-помощнику.',
+    ]);
+    return;
+  }
   if (act === 'file') { await store.flush(); await exportProjectFile(p); toast('Файл проекта сохранён в загрузки'); }
   if (act === 'import-script') {
     const file = await pickFile(SCRIPT_FILES);
@@ -423,25 +472,6 @@ $('#view-project').addEventListener('click', async e => {
     replaceHash('#/');
     toast(isCloud(p.id) ? 'Проект удалён из облака' : storage.mode === 'server' ? 'Проект перенесён в projects/.trash' : 'Проект удалён');
   }
-});
-
-// ---------- Shot Designer: все планы проекта ----------
-
-function renderPlans() {
-  const p = store.project, base = `#/p/${p.id}`;
-  $('#view-plans').innerHTML = `<div class="page">
-    <header class="page-head"><h1>Shot Designer</h1><button class="act main" data-act="new-plan">Новый план</button></header>
-    <p class="page-hint">Планы сверху: мизансцена, камера, свет. Номер сцены под планом открывает её текст рядом. Правая кнопка мыши по плану: отвязать от сцены или локации, удалить.</p>
-    <div class="plan-row">${p.plans.map(x => {
-      const t = sceneTitle(p, x.sceneId), l = p.locations.find(q => q.id === x.locationId);
-      return `<div class="plan-tile"><a href="${base}/plan/${x.id}"><span class="thumb">${planSVG(x, { pad: 0.8 })}</span><span class="tile-name">${esc(x.name)}</span></a>
-        <span class="tile-meta">${t ? `<button class="linkbtn" data-scene-open="${x.sceneId}" title="${esc(t.text)}">Сцена ${t.n}</button>` : 'Без сцены'}${l ? ` · <button class="linkbtn" data-loc-open="${l.id}" title="Показать локацию рядом">${esc(l.name)}</button>` : ''}</span></div>`;
-    }).join('')}
-      <button class="plan-tile plan-new" data-act="new-plan"><span class="thumb"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></span><span class="tile-name">Новый план</span></button>
-    </div></div>`;
-}
-$('#view-plans').addEventListener('click', e => {
-  if (e.target.closest('[data-act="new-plan"]')) location.hash = `#/p/${store.project.id}/plan/${createPlan()}`;
 });
 
 // кнопки «Сцена N», локация и план в любом месте программы открывают их на половине экрана

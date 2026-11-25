@@ -185,7 +185,7 @@ function syncPhase(plan) {
 // ---------- инструменты ----------
 const S = (props, required = []) => ({ type: 'object', properties: props, required, additionalProperties: false });
 const P = { type: 'string', description: 'Проект: id (например p-ptichka или c-AbC123) или название.' };
-const PL = { type: 'string', description: 'План (Shot Designer): id или название.' };
+const PL = { type: 'string', description: 'План мизансцены (раздел «Кадры»): id или название.' };
 
 const TOOLS = [
   {
@@ -196,7 +196,7 @@ const TOOLS = [
   },
   {
     name: 'get_project', title: 'Обзор проекта',
-    description: 'Обзор проекта: сцены сценария, планы Shot Designer с числом объектов и фаз, число кадров режиссёрского сценария.',
+    description: 'Обзор проекта: сцены сценария, планы мизансцены с числом объектов и фаз, число кадров режиссёрского сценария.',
     inputSchema: S({ project: P }, ['project']), annotations: { readOnlyHint: true },
     run: async ({ project }) => {
       const id = await resolve(project), { data, role } = await load(id), p = normalize(data);
@@ -267,7 +267,7 @@ const TOOLS = [
     }),
   },
   {
-    name: 'get_plan', title: 'План Shot Designer',
+    name: 'get_plan', title: 'План мизансцены',
     description: 'План сцены сверху целиком: объекты (стены, мебель, персонажи, камеры, свет), фазы движения и цвета. Координаты в метрах, X вправо, Y вниз, rot в градусах по часовой, 0 = смотрит вправо.',
     inputSchema: S({ project: P, plan: PL }, ['project', 'plan']), annotations: { readOnlyHint: true },
     run: async ({ project, plan }) => {
@@ -277,7 +277,7 @@ const TOOLS = [
   },
   {
     name: 'create_plan', title: 'Новый план',
-    description: 'Создаёт план Shot Designer, при желании сразу с объектами (формат как в add_objects) и привязкой к сцене (номер сцены).',
+    description: 'Создаёт план мизансцены (раздел «Кадры»), при желании сразу с объектами (формат как в add_objects) и привязкой к сцене (номер сцены).',
     inputSchema: S({ project: P, name: { type: 'string' }, scene: { type: 'integer' }, objects: { type: 'array', items: { type: 'object' } } }, ['project', 'name']),
     run: async ({ project, name, scene, objects }) => edit(project, async p => {
       const plan = { id: 'plan-' + uid(), name: String(name), note: '', sceneId: scene ? (scenes(p)[scene - 1] || {}).id || '' : '', objects: [] };
@@ -367,14 +367,14 @@ const TOOLS = [
   {
     name: 'edit_shots', title: 'Править режиссёрский сценарий',
     description: 'Операции с кадрами: {op:"add", after: id кадра или null (в конец), shot:{scene (номер сцены), size, move, content, dur, note, mode, chars, props, tech, planId, cameraId}}, {op:"update", id, ...поля}, {op:"delete", id}. ' +
-      'size: Деталь, Крупный, Средний по пояс, Средний по колено, Общий, Дальний. move: Статика, Панорама, Наезд или отъезд, Тележка, Стедикам, С рук, Кран, Слайдер, Пролёт.',
+      'size: Деталь, Крупный, Первый средний, Второй средний, Третий средний, Общий, Дальний (можно пусто). move: Статика, Панорама, Наезд или отъезд, Тележка, Стедикам, С рук, Кран, Слайдер, Пролёт.',
     inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
     run: async ({ project, ops }) => edit(project, p => {
       const sc = scenes(p), done = [];
       const fix = s => { if (s.scene) { s.sceneId = (sc[s.scene - 1] || {}).id || ''; delete s.scene; } delete s.n; return s; };
       for (const o of ops || []) {
         if (o.op === 'add') {
-          const s = fix({ id: uid(), size: 'Средний по пояс', move: 'Статика', content: '', ...(o.shot || {}) });
+          const s = fix({ id: uid(), size: '', move: '', content: '', ...(o.shot || {}) });
           const i = o.after == null ? p.shots.length : p.shots.findIndex(x => x.id === o.after) + 1;
           if (o.after != null && i === 0) throw new UserError('Нет кадра ' + o.after);
           p.shots.splice(i, 0, s); done.push(s.id);
@@ -450,7 +450,11 @@ const TOOLS = [
             for (const it of p.breakdown) if (it.sceneId === s.id && it.auto && !it.off) { it.off = true; it.offBy = 'ai'; changed.push(it.id); }
           } else throw new UserError('Неизвестная операция ' + o.op);
         }
-        return { ok: true, added, changed, skipped };
+        // у каждого места из разобранных сцен появляется локация (или сцена встаёт в уже существующую)
+        p.locations = Array.isArray(p.locations) ? p.locations : [];
+        const touched = [...new Set((ops || []).map(o => o.scene ? sceneOf(o.scene).id : (p.breakdown.find(x => x.id === o.id) || {}).sceneId).filter(Boolean))];
+        const locations_created = bd.ensureLocations(p, touched, uid);
+        return { ok: true, added, changed, skipped, locations_created };
       });
     },
   },
@@ -808,7 +812,7 @@ const BREAKDOWN_RULES = `Правила разбора сцены по граф�
 7. Текст сценария не правь. Если заметил ошибку разметки (например, строка «АКТ 2» размечена как персонаж), скажи об этом человеку, а не исправляй сам.
 8. В конце коротко отчитайся человеку по-русски: сколько записей по каким сценам, что пометил как требующее решения, где сомневался.`;
 
-const INSTRUCTIONS = 'Мизансцена: программа режиссёра (сценарий, разбор сцен по графам, режиссёрский сценарий, локации, Shot Designer — план сцены сверху с камерами, светом и персонажами, плюс 3D-вид). ' +
+const INSTRUCTIONS = 'Мизансцена: программа режиссёра (сценарий, разбор сцен по графам, режиссёрский сценарий, локации, раздел «Кадры» — план мизансцены сверху с камерами, светом и персонажами, плюс 3D-вид, и раскадровка — картинки кадров режиссёрского сценария). ' +
   'Начни с list_projects и get_project. Перед расстановкой объектов вызови get_reference. Правки сразу видны в открытой программе. ' +
   'Тексты сценария принадлежат автору: переписывай их, только если человек об этом просит. ' +
   'Отвечай по-русски, сцены называй номерами.\n\n' + BREAKDOWN_RULES + '\n\n' + SCHEDULE_RULES + '\n\n' + CALLSHEET_RULES;

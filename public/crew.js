@@ -29,7 +29,8 @@ export function renderCrew() {
   const people = sch.info.crew;
   const castRows = cast.filter(c => match(c.char, c.actor, c.phone)).map(c => {
     const d = dood.find(x => x.char === c.char), days = d ? d.marks.map((m, i) => (m && m !== 'H' ? i + 1 : 0)).filter(Boolean) : [];
-    return `<tr data-char="${esc(c.char)}"><td class="cr-n">${c.n}</td><td><b>${esc(title(c.char))}</b></td>
+    const own = !c.scenes.length && !info.some(sc => sc.chars.includes(c.char)); // вписан руками, в сценарии его нет
+    return `<tr data-char="${esc(c.char)}"><td class="cr-n">${c.n}</td><td><b>${esc(title(c.char))}</b>${own ? ` <button class="cr-delchar" data-delchar="${esc(c.char)}" title="Убрать персонажа" aria-label="Убрать персонажа">×</button>` : ''}</td>
       <td><input data-cast="actor" value="${esc(c.actor)}" placeholder="Кто играет"></td>
       <td class="cr-phone"><input data-cast="phone" value="${esc(c.phone)}" placeholder="${CONTACT_PH}">${tel(c.phone)}</td>
       <td>${c.scenes.length}</td><td>${days.length ? `${days.length} <small>(${days.join(', ')})</small>` : '<small>не в КПП</small>'}</td>
@@ -42,7 +43,7 @@ export function renderCrew() {
     return `<section class="cr-dept" data-dept="${esc(d)}"><header><h2>${esc(d)} <span>${people.filter(r => r.dept === d).length || ''}</span></h2>
         <button class="linkbtn" data-add="${esc(d)}">+ человек</button></header>
       ${rows.length ? `<div class="sl-wrap"><table class="cr-table"><thead><tr><th>Должность</th><th>Имя</th><th>Этап</th><th>Город</th><th>Телефон / Telegram</th><th>Почта</th><th>Заметка</th><th title="Показывать в блоке «Руководители группы» вызывного листа">В вызывном</th><th></th></tr></thead><tbody>
-        ${rows.map(r => `<tr data-row="${r.id}"><td><input data-f="role" value="${esc(r.role)}" placeholder="Должность" list="cr-roles-${DEPARTMENTS.indexOf(d)}"></td><td><input data-f="name" value="${esc(r.name)}" placeholder="Имя и фамилия"></td>
+        ${rows.map(r => `<tr data-row="${r.id}"><td><input data-f="role" value="${esc(r.role)}" placeholder="Должность" data-combo="cr-roles-${DEPARTMENTS.indexOf(d)}" autocomplete="off"></td><td><input data-f="name" value="${esc(r.name)}" placeholder="Имя и фамилия"></td>
           <td><select class="cr-status ${statusCls(r.status)}" data-f="status"><option value="">—</option>${STATUSES.map(x => `<option${x === r.status ? ' selected' : ''}>${x}</option>`).join('')}</select></td>
           <td><input data-f="city" value="${esc(r.city)}" placeholder="Город" class="cr-city"></td>
           <td class="cr-phone"><input data-f="phone" value="${esc(r.phone)}" placeholder="${CONTACT_PH}">${tel(r.phone)}</td><td><input data-f="email" value="${esc(r.email)}" placeholder="почта"></td>
@@ -61,7 +62,9 @@ export function renderCrew() {
       <button class="act" data-act="pdf">PDF</button><button class="act" data-act="xlsx">Excel</button></header>
     <p class="page-hint">${total ? `В группе ${named ? `${named} чел.` : 'пока никого'}${total > named ? `, ещё ${total - named} ${total - named === 1 ? 'должность' : total - named < 5 ? 'должности' : 'должностей'} без имени` : ''}.` : 'Здесь вся группа проекта.'} Актёры общие с КПП и вызывными листами. Галочка «В вызывном» показывает человека в блоке «Руководители группы».</p>
     <section class="cr-dept cr-cast"><header><h2>Актёры <span>${cast.length || ''}</span></h2></header>
-      ${cast.length ? `<div class="sl-wrap"><table class="cr-table"><thead><tr><th>№</th><th>Персонаж</th><th>Актёр</th><th>Телефон / Telegram</th><th>Сцен</th><th>Съёмочных дней</th><th title="Сколько минут на грим персонажа">Грим, мин</th><th title="Сколько минут на костюм">Костюм, мин</th><th title="За сколько минут до готовности приезжает машина">Машина, мин</th><th>Занятость</th></tr></thead><tbody>${castRows}</tbody></table></div>` : '<p class="empty">Персонажи появятся из сценария.</p>'}</section>
+      <div class="sl-wrap"><table class="cr-table"><thead><tr><th>№</th><th>Персонаж</th><th>Актёр</th><th>Телефон / Telegram</th><th>Сцен</th><th>Съёмочных дней</th><th title="Сколько минут на грим персонажа">Грим, мин</th><th title="Сколько минут на костюм">Костюм, мин</th><th title="За сколько минут до готовности приезжает машина">Машина, мин</th><th>Занятость</th></tr></thead><tbody>${castRows}
+        <tr class="cr-addrow"><td class="cr-n"></td><td colspan="3"><input class="cr-addchar" placeholder="+ персонаж и Enter — можно и без сценария" aria-label="Новый персонаж"></td><td colspan="6"></td></tr></tbody></table></div>
+      ${cast.length ? '' : '<p class="page-hint">Персонажи сами появятся из сценария — или впишите их здесь.</p>'}</section>
     <div class="cr-grid">${DEPARTMENTS.map(dept).join('')}</div>
   </div>`;
 }
@@ -95,6 +98,11 @@ view.addEventListener('click', e => {
   const p = project(), b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.busy) { busyDialog(b.dataset.busy); return; }
+  if (b.dataset.delchar) {
+    const sch = p.schedule, r = sch.cast.find(c => c.char.toUpperCase() === b.dataset.delchar);
+    if (r && (r.actor || r.phone) && !confirm(`Убрать персонажа ${title(b.dataset.delchar)} вместе с актёром ${r.actor || ''}?`)) return;
+    sch.cast = sch.cast.filter(c => c.char.toUpperCase() !== b.dataset.delchar); store.touch(); rerender(); return;
+  }
   if (b.dataset.add) {
     const r = { id: uid(), dept: b.dataset.add, role: '', name: '', phone: '', email: '', note: '', lead: false };
     p.schedule.info.crew.push(r); store.touch(); query = ''; rerender(`[data-row="${r.id}"] [data-f="role"]`); return;
@@ -241,3 +249,14 @@ function busyDialog(char) {
   document.body.append(d);
   d.showModal();
 }
+
+// персонаж без сценария: вписать имя и Enter
+view.addEventListener('keydown', e => {
+  if (!e.target.matches('.cr-addchar') || e.key !== 'Enter') return;
+  e.preventDefault();
+  const name = e.target.value.trim().toUpperCase(), sch = project().schedule;
+  if (!name) return;
+  if (castList(project()).some(c => c.char === name)) { toast('Такой персонаж уже есть'); return; }
+  sch.cast.push({ id: uid(), char: name, actor: '', phone: '', busy: [], makeupMin: 0, costumeMin: 0, carMin: 0 });
+  store.touch(); rerender('.cr-addchar');
+});
