@@ -37,8 +37,26 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Сборка и публикация
-        run: npx electron-builder ${{ matrix.os == 'windows-latest' && '--win' || '--mac' }} --publish always
+      - name: Сборка
+        run: npx electron-builder ${{ matrix.os == 'windows-latest' && '--win' || '--mac' }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      # Адрес обновлений вшит в программу и указывает на публичный репозиторий с одними установщиками (PUB).
+      # В этот репозиторий (код закрыт) файлы кладём в том числе токеном RELEASES_TOKEN из настроек репозитория;
+      # без токена файлы остаются только в выпуске этого репозитория.
+      - name: Загрузка в выпуски
+        shell: bash
+        run: |
+          files=$(ls dist/*.exe dist/*.dmg dist/*.zip dist/*.blockmap dist/latest*.yml 2>/dev/null || true)
+          echo "$files"
+          gh release upload "$TAG" $files --clobber --repo "$REPO"
+          if [ -n "$RELEASES_TOKEN" ]; then
+            GH_TOKEN="$RELEASES_TOKEN" gh release create "$TAG" --repo "$PUB" --title "${TAG#v}" --notes "Мизансцена ${TAG#v}" || true
+            GH_TOKEN="$RELEASES_TOKEN" gh release upload "$TAG" $files --clobber --repo "$PUB"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          PUB: main-roman/mizanscena-releases

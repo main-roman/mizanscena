@@ -53,7 +53,7 @@ ipcMain.handle('yandex-login', (e, clientId) => new Promise(resolve => {
 // Новые версии публикуются на GitHub (раздел Releases). Программа проверяет их при запуске и раз в 4 часа
 // и спрашивает, обновиться ли. На Windows обновление скачивается и ставится само.
 // На Mac без платной подписи Apple само обновление поставить нельзя, поэтому там открывается страница загрузки.
-const RELEASES = 'https://github.com/main-roman/mizanscena/releases/latest';
+const RELEASES = 'https://github.com/main-roman/mizanscena-releases/releases/latest';
 function setupUpdates() {
   if (!app.isPackaged) return; // при запуске из папки с исходниками обновления не проверяются
   let autoUpdater;

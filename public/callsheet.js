@@ -6,7 +6,7 @@ import { store, $, uid, esc, toast, printHTML, safeName, objKey, setObjectGeo, s
 import { CATS, sceneInfo, sceneItems, locationFromScene } from './breakdown.js';
 import { pointerDrag } from './dragsort.js';
 import { locate, weatherFor } from './weather.js';
-import { castList, dayInfo, guessDept, objectOf, lunchEndOf, autoTimes, moveToDate, shiftNo, busyOn, DAY_KINDS, contactLink, CONTACT_PH, synopsisOf, sceneMeta, clockText, timeline, BLOCKS, SHIFT_CELLS, DEFAULT_DEPTS, DEFAULT_TRANSPORT } from './schedmodel.js';
+import { deptCall, normalizeSchedule, castList, dayInfo, guessDept, objectOf, lunchEndOf, autoTimes, moveToDate, shiftNo, busyOn, DAY_KINDS, contactLink, CONTACT_PH, synopsisOf, sceneMeta, clockText, timeline, BLOCKS, SHIFT_CELLS, DEFAULT_DEPTS, DEFAULT_TRANSPORT } from './schedmodel.js';
 
 const project = () => store.project;
 let openId = '';
@@ -100,9 +100,9 @@ const B = {
     if (!edit && !time && !place && !day.meetNote) return '';
     return `<div class="cs-meetrow">
       <b class="cs-meet-t">${edit ? `<input type="time" data-obj="day" data-key="meetTime" value="${esc(day.meetTime || day.call)}" title="${day.meetTime ? 'Время сбора группы' : 'Пока не вписано — по началу смены'}"${day.meetTime ? '' : ' class="t-auto"'}>` : esc(time || '')}</b>
-      ${edit ? `<input type="text" class="cs-meet-p" data-obj="day" data-key="meet" value="${esc(day.meet)}" placeholder="${esc(def || 'Место сбора')}" title="Пока не вписано своё — адрес объекта первой сцены">
+      ${edit ? `<textarea class="cs-meet-p cs-grow" rows="1" data-obj="day" data-key="meet" placeholder="${esc(def || 'Место сбора')}" title="Пока не вписано своё — адрес объекта первой сцены">${esc(day.meet)}</textarea>
         ${href ? `<a class="act cs-meet-map" href="${esc(href)}" target="_blank" rel="noopener" title="Открыть место сбора в Яндекс Картах">На карте</a>` : ''}
-        <input type="text" class="cs-meet-n" data-obj="day" data-key="meetNote" value="${esc(day.meetNote)}" placeholder="Примечание: где встречаемся, что взять">`
+        <textarea class="cs-meet-n cs-grow" rows="1" data-obj="day" data-key="meetNote" placeholder="Примечание: где встречаемся, что взять">${esc(day.meetNote)}</textarea>`
         : `${href ? `<a class="cs-meet-p" href="${esc(href)}" target="_blank" rel="noopener">${esc(shown || 'Метка на карте')}</a>` : `<span class="cs-meet-p">${esc(shown || '')}</span>`}${day.meetNote ? `<span class="cs-meet-n">${esc(day.meetNote)}</span>` : ''}`}</div>`;
   },
   locs(c) {
@@ -218,9 +218,11 @@ function crewPicker(p) {
 function timedList(c, key, defaults, ph) {
   const { day, e, edit } = c, list = (day[key] || defaults.map(name => ({ id: 'def-' + name, name, time: '', off: false }))).filter(r => edit || !r.off);
   if (!list.length) return '';
-  if (!edit) return `<div class="cs-list${list.length > 5 ? ' two' : ''}">${list.map(r => `<div class="cs-li"><span>${esc(r.name)}</span><b>${esc(r.time || day.call)}</b></div>`).join('')}</div>`;
-  return `<table class="cs-table cs-two"><tbody>${list.map(r => `<tr${r.off ? ' class="cs-offrow"' : ''}>${edit ? `<td class="cs-use"><input type="checkbox" data-use="${key}" data-row="${r.id}"${r.off ? '' : ' checked'} title="Нужен в этой смене"></td>` : ''}<td>${e.cell(key, r.id, 'name', r.name, ph)}</td><td>${e.cell(key, r.id, 'time', r.time || (edit ? '' : day.call), day.call || '10:00', 'time')}</td>${edit ? `<td class="cs-x"><button class="ico" data-del="${key}" data-row="${r.id}" aria-label="Убрать строку">${X}</button></td>` : ''}</tr>`).join('')}</tbody></table>
-    ${edit ? `<div class="cs-add"><button class="linkbtn" data-add="${key}">+ строка</button></div><p class="page-hint">Галочка — нужен в этой смене; без неё строки нет в PDF. Пустое время — к началу смены.</p>` : ''}`;
+  // пустое время — стандартный вызов цеха от начала смены (администрация и художники за час и т. д.)
+  const auto = r => deptCall(r.name, day.call);
+  if (!edit) return `<div class="cs-list${list.length > 5 ? ' two' : ''}">${list.map(r => `<div class="cs-li"><span>${esc(r.name)}</span><b>${esc(r.time || auto(r))}</b></div>`).join('')}</div>`;
+  return `<table class="cs-table cs-two"><tbody>${list.map(r => `<tr${r.off ? ' class="cs-offrow"' : ''}>${edit ? `<td class="cs-use"><input type="checkbox" data-use="${key}" data-row="${r.id}"${r.off ? '' : ' checked'} title="Нужен в этой смене"></td>` : ''}<td>${e.cell(key, r.id, 'name', r.name, ph)}</td><td${r.time ? '' : ' class="t-auto" title="Стандартный вызов цеха от начала смены — впишите своё, если нужно"'}>${e.cell(key, r.id, 'time', r.time || auto(r), auto(r) || day.call || '10:00', 'time')}</td>${edit ? `<td class="cs-x"><button class="ico" data-del="${key}" data-row="${r.id}" aria-label="Убрать строку">${X}</button></td>` : ''}</tr>`).join('')}</tbody></table>
+    ${edit ? `<div class="cs-add"><button class="linkbtn" data-add="${key}">+ строка</button></div><p class="page-hint">Галочка — нужен в этой смене; без неё строки нет в PDF. Пустое время — стандартный вызов цеха: администрация, художники, реквизит, костюм и грим за час до начала смены, свет за 45 минут, операторы, звук и режиссёрская группа за полчаса.</p>` : ''}`;
 }
 
 // узкие блоки в PDF собираются в одну «газетную» вставку на две колонки: они текут сверху вниз
@@ -287,6 +289,9 @@ async function loadWeather(p, day) {
 export function mountCallsheet(id) { openId = id; renderCallsheet(); }
 
 export function renderCallsheet() {
+  // день, только что добавленный в КПП, ещё без полей вызывного (сбор, цеха, транспорт…) — дополняем,
+  // иначе вызывной открывался пустым до перезапуска программы
+  normalizeSchedule(project(), uid);
   const p = project(), sch = p.schedule, i = sch.days.findIndex(d => d.id === openId), day = sch.days[i];
   if (!day) return;
   loadWeather(p, day);
@@ -305,6 +310,7 @@ export function renderCallsheet() {
     </div>
     ${sheet(p, day, true)}
   </div>`;
+  for (const t of v.querySelectorAll('textarea.cs-grow')) growArea(t);
   v.scrollTop = y;
 }
 
@@ -325,6 +331,9 @@ function castRow(char) {
   return row;
 }
 
+// длинное место сбора и примечание видны целиком: поле растёт по тексту
+const growArea = t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; };
+view.addEventListener('input', e => { if (e.target.matches && e.target.matches('textarea.cs-grow')) growArea(e.target); });
 view.addEventListener('input', e => {
   const p = project(), day = today(), t = e.target;
   if (!day) return;
@@ -415,9 +424,9 @@ view.addEventListener('click', e => {
   if (!b || !day) return;
   const d = b.dataset;
   if (d.person) { addLead(d.person); return; }
-  if (d.add === 'crew') { p.schedule.info.crew.push({ id: uid(), dept: 'Другое', role: '', name: '', phone: '', email: '', note: '', lead: true }); store.touch(); renderCallsheet(); return; }
+  if (d.add === 'crew') { p.schedule.info.crew.push({ id: uid(), dept: 'Другое', role: '', name: '', phone: '', tg: '', note: '', lead: true }); store.touch(); renderCallsheet(); return; }
   if (d.add) { listOf(day, d.add).push({ id: uid(), name: '', role: '', time: '', phone: '' }); store.touch(); renderCallsheet(); return; }
-  if (d.fill === 'crew') { for (const role of CREW_ROLES) p.schedule.info.crew.push({ id: uid(), dept: guessDept(role), role, name: '', phone: '', email: '', note: '', lead: true }); store.touch(); renderCallsheet(); return; }
+  if (d.fill === 'crew') { for (const role of CREW_ROLES) p.schedule.info.crew.push({ id: uid(), dept: guessDept(role), role, name: '', phone: '', tg: '', note: '', lead: true }); store.touch(); renderCallsheet(); return; }
   if (d.del === 'crew') { const r = p.schedule.info.crew.find(x => x.id === d.row); if (r) { r.lead = false; store.touch(); renderCallsheet(); } return; }
   if (d.del) {
     const list = listOf(day, d.del), i = list.findIndex(r => r.id === d.row);

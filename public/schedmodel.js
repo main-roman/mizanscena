@@ -69,7 +69,7 @@ export function normalizeSchedule(p, uid) {
   // группа: цех, должность, контакты; lead — показывать в «Руководителях группы» вызывного
   for (const c of s.info.crew) {
     c.id = c.id || uid();
-    for (const k of ['role', 'name', 'phone', 'email', 'note', 'status', 'city']) c[k] = str(c[k]);
+    for (const k of ['role', 'name', 'phone', 'email', 'tg', 'note', 'status', 'city']) c[k] = str(c[k]);
     c.dept = DEPARTMENTS.includes(c.dept) ? c.dept : guessDept(c.role);
     c.lead = c.lead !== false;
   }
@@ -153,6 +153,23 @@ export const SHIFT_CELLS = [
   ['phone', 'Телефон площадки'], ['weather', 'Погода'], ['temp', 't днём / ночью'], ['sun', 'Солнце'],
 ];
 export const DEFAULT_DEPTS = ['Режиссёрская группа', 'Операторы, видеоинженер', 'Осветители', 'Звук', 'Художники, постановщики', 'Реквизит', 'Костюм, грим', 'Ассистент по актёрам', 'Администрация'];
+// Стандартный вызов цеха: за сколько минут до начала смены. Своё время в вызывном важнее.
+// Администрация, художники, реквизит, костюм и грим — за час; свет и генератор — за 45 минут;
+// камера, звук, режиссёрская группа и ассистент по актёрам — за полчаса.
+export function deptLead(name) {
+  const n = String(name || '').toLowerCase();
+  if (/админ|продюс|директор|площад|локейш/.test(n)) return 60;
+  if (/худож|постанов|арт|декор|реквиз|костюм|грим|худваген/.test(n)) return 60;
+  if (/свет|осветит|гафф|генератор|светобаз/.test(n)) return 45;
+  if (/операт|камер|видео|фокус|механик|звук|режисс|скрипт|ассистент/.test(n)) return 30;
+  return 0;
+}
+export function deptCall(name, call) {
+  const m = String(call || '').match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return call || '';
+  const t = ((+m[1] * 60 + +m[2] - deptLead(name)) % 1440 + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+}
 export const DEFAULT_TRANSPORT = ['Камерваген', 'Светобаза, генератор', 'Худваген', 'Реквизиторская'];
 
 // Синопсис для КПП: свой, а если не вписан — первая строка действия сцены.

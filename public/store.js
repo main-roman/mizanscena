@@ -195,7 +195,9 @@ export const store = {
   close() { this.project = null; },
 
   // ---------- отмена и возврат (Ctrl+Z, Ctrl+Y) ----------
-  // Снимок проекта до правки; правки подряд без паузы (набор текста, перетаскивание) — один шаг отмены.
+  // Шаг отмены — пара снимков «до» и «после» моей правки; правки подряд без паузы (набор текста, перетаскивание) —
+  // один шаг. Отмена откатывает только эту разницу, трёхсторонним объединением с тем, что в проекте сейчас:
+  // правки соавторов, пришедшие после моей, остаются на месте.
   resetHistory() { this.undos = []; this.redos = []; this.base = this.project ? canon(this.project) : ''; this.pending = false; clearTimeout(this.histTimer); },
   settle() {
     clearTimeout(this.histTimer);
@@ -203,7 +205,7 @@ export const store = {
     this.pending = false;
     const now = canon(this.project);
     if (now === this.base) return; // то же содержимое (пусть и в другом порядке полей) — не шаг
-    this.undos.push(this.base);
+    this.undos.push({ before: this.base, after: now });
     if (this.undos.length > 60) this.undos.shift();
     this.redos = [];
     this.base = now;
@@ -217,27 +219,40 @@ export const store = {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.save(), 300);
   },
-  // проект заменили снаружи: прежнее состояние — шаг отмены
+  // правку соавтора (облако) принимаем как новое исходное состояние: она не входит в мои шаги отмены
+  rebase(json) {
+    if (!this.undos) return;
+    this.settle();
+    this.base = json;
+  },
+  // локальный проект изменили снаружи (ИИ-помощник, другое окно): это тоже можно отменить
   remember(json) {
     if (!this.undos) return;
     this.settle();
-    if (this.base && this.base !== json) { this.undos.push(this.base); if (this.undos.length > 60) this.undos.shift(); this.redos = []; }
+    if (this.base && this.base !== json) { this.undos.push({ before: this.base, after: json }); if (this.undos.length > 60) this.undos.shift(); this.redos = []; }
     this.base = json;
+  },
+  // применить разницу между двумя снимками к тому, что в проекте сейчас
+  apply(from, to) {
+    const cur = JSON.parse(canon(this.project));
+    this.restore(canon(merge(JSON.parse(from), JSON.parse(to), cur)));
   },
   undo() {
     if (!this.project) return false;
     this.settle();
     if (!this.undos || !this.undos.length) return false;
-    this.redos.push(this.base);
-    this.restore(this.undos.pop());
+    const e = this.undos.pop();
+    this.redos.push(e);
+    this.apply(e.after, e.before);
     return true;
   },
   redo() {
     if (!this.project) return false;
     this.settle();
     if (!this.redos || !this.redos.length) return false;
-    this.undos.push(this.base);
-    this.restore(this.redos.pop());
+    const e = this.redos.pop();
+    this.undos.push(e);
+    this.apply(e.before, e.after);
     return true;
   },
 
@@ -307,7 +322,7 @@ export const store = {
       cloud.accept(p.id, r.data, r.version);
       const next = normalizeProject(r.data);
       next.id = p.id;
-      this.remember(canon(next));
+      this.rebase(canon(next));
       this.project = next;
       this.last = JSON.stringify(next);
       this.onRemote(next, 'cloud');
@@ -359,14 +374,17 @@ export async function copyToCloud(p) {
   delete copy.id;
   const imgs = [];
   eachImage(copy, (o, key) => { if (o[key] && !String(o[key]).startsWith('cloud:')) imgs.push([o, key]); });
-  // id проекта нужен для загрузки картинок, поэтому сначала создаём проект, потом кладём картинки и сохраняем ещё раз
-  const id = await cloud.create(imgs.length ? { ...copy, plans: [], shots: [], locations: [], script: { blocks: [] } } : copy);
+  // id проекта нужен для загрузки картинок, поэтому сначала создаём проект, потом кладём картинки и сохраняем ещё раз.
+  // Создаём сразу со всем текстом (сценарий, кадры, планы, локации): если загрузка картинок или последнее
+  // сохранение оборвётся, в облаке останется полный проект, а не одна группа.
+  const id = await cloud.create(copy);
   if (!imgs.length) return id;
   for (const [o, key] of imgs) {
     try { o[key] = await cloud.upload(id, await (await fetch(o[key])).blob()); } catch { /* картинку пропустим, проект важнее */ }
   }
   await cloud.get(id);
   copy.id = id;
+  for (const s of copy.shots) if (Array.isArray(s.frames)) s.frame = s.frames[0] || '';
   await cloud.put(copy);
   return id;
 }

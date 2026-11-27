@@ -469,13 +469,13 @@ const TOOLS = [
       return {
         cast: sm.castList(p).map(c => ({ n: c.n, character: c.char, actor: c.actor, phone: c.phone, scenes: c.scenes.length })),
         departments: sm.DEPARTMENTS,
-        crew: p.schedule.info.crew.map(({ id: rid, dept, role, name, status, city, phone, email, note, lead }) => ({ id: rid, dept, role, name, status, city, phone, email, note, lead })),
+        crew: p.schedule.info.crew.map(({ id: rid, dept, role, name, status, city, phone, tg, note, lead }) => ({ id: rid, dept, role, name, status, city, phone, tg, note, lead })),
       };
     },
   },
   {
     name: 'edit_crew', title: 'Править группу',
-    description: 'ops: {op:"add", role, name, dept?, status?, city?, phone?, email?, note?, lead?} — цех по должности определяется сам; ' +
+    description: 'ops: {op:"add", role, name, dept?, status?, city?, phone?, tg? (Telegram: @ник), note?, lead?} — цех по должности определяется сам; ' +
       '{op:"update", id, ...поля}; {op:"remove", id}; {op:"actor", character, actor?, phone?, makeupMin?, costumeMin?, carMin?, busy?: [{date, kind:"busy"|"part", note}]} — кто играет персонажа, сколько минут на грим и костюм, за сколько до готовности машина, когда актёр занят. ' +
       'Телефон пиши как есть, ник в Telegram — с @. Должности пиши полностью: «Художник по костюму», а не «Худ. по кост».',
     inputSchema: S({ project: P, ops: { type: 'array', items: { type: 'object' } } }, ['project', 'ops']),
@@ -484,7 +484,7 @@ const TOOLS = [
       return edit(project, p => {
         sm.normalizeSchedule(p, uid);
         const crew = p.schedule.info.crew, done = [];
-        const F = ['role', 'name', 'status', 'city', 'phone', 'email', 'note'];
+        const F = ['role', 'name', 'status', 'city', 'phone', 'tg', 'note'];
         for (const o of ops || []) {
           if (o.op === 'add') {
             const dept = sm.DEPARTMENTS.includes(o.dept) ? o.dept : sm.guessDept(o.role);

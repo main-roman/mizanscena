@@ -1,6 +1,6 @@
 {
   "name": "mizanscena",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Мизансцена: сценарий, режиссёрский сценарий и Shot Designer в одной программе.",
   "main": "desktop.js",
   "scripts": {
@@ -21,7 +21,7 @@
     "electron-updater": "^6.8.11"
   },
   "productName": "Мизансцена",
-  "homepage": "https://github.com/main-roman/mizanscena",
+  "homepage": "https://github.com/main-roman/mizanscena-releases",
   "repository": {
     "type": "git",
     "url": "https://github.com/main-roman/mizanscena.git"
@@ -92,7 +92,7 @@
       {
         "provider": "github",
         "owner": "main-roman",
-        "repo": "mizanscena",
+        "repo": "mizanscena-releases",
         "releaseType": "release"
       }
     ]

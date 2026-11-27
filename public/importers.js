@@ -21,6 +21,16 @@ export function classify(lines) {
     const { text: raw, indent = 0, gap = false } = lines[i];
     const t = clean(raw);
     if (!t || /^\d{1,3}\.?$/.test(t)) continue; // номера страниц
+    const st = lines[i].style;
+    if (st && (started || st === 'scene')) {
+      if (st === 'scene') { started = true; talk = false; push('scene', t.replace(/^\d+[.)]?\s*/, '').toUpperCase()); continue; }
+      if (st === 'character' && /^\(/.test(t)) { push('paren', t.replace(/^\(|\)$/g, '').trim()); continue; } // ремарка, оформленная стилем имени
+      if (st === 'character') { push('character', t); talk = true; continue; }
+      if (st === 'paren') { push('paren', t.replace(/^\(|\)$/g, '').trim()); continue; }
+      if (st === 'dialogue') { push('dialogue', t); talk = true; continue; }
+      if (st === 'transition') { push('transition', t); talk = false; continue; }
+      if (st === 'action') { push('action', t); talk = false; continue; }
+    }
     if (HEADING.test(t)) {
       started = true; talk = false;
       push('scene', t.replace(/^\d+[.)]?\s*/, '').toUpperCase());
@@ -114,6 +124,19 @@ async function unzip(buf) {
   }
   return files;
 }
+// Стили абзацев сценарных шаблонов Word (Final Draft, КИТ, «Сценарист» и самодельные): по ним тип блока
+// известен точно, отступы не нужны. Имя персонажа и его реплика в таких файлах — разные абзацы.
+function styleType(id) {
+  const v = String(id || '').toLowerCase().replace(/[\s_-]+/g, '');
+  if (!v) return '';
+  if (/^(sceneheading|scene|slugline|заголовоксцены|времяиместо|сцена)/.test(v)) return 'scene';
+  if (/^(character|персонаж|имя)/.test(v)) return 'character';
+  if (/^(dialog|dialogue|реплика|диалог)/.test(v)) return 'dialogue';
+  if (/^(parenthetical|paren|ремарка)/.test(v)) return 'paren';
+  if (/^(transition|переход)/.test(v)) return 'transition';
+  if (/^(action|описание|действие)/.test(v)) return 'action';
+  return '';
+}
 async function docxLines(buf) {
   const files = await unzip(buf);
   if (!files['word/document.xml']) throw new Error('not docx');
@@ -131,10 +154,11 @@ async function docxLines(buf) {
     }
     if (!text.trim()) { gap = true; continue; }
     const ind = p.getElementsByTagNameNS(W, 'ind')[0], jc = p.getElementsByTagNameNS(W, 'jc')[0];
+    const ps = p.getElementsByTagNameNS(W, 'pStyle')[0], style = styleType(ps ? ps.getAttributeNS(W, 'val') || ps.getAttribute('w:val') : '');
     const leftTw = ind ? +(ind.getAttributeNS(W, 'left') || ind.getAttributeNS(W, 'start') || 0) : 0;
     const center = jc && /center/.test(jc.getAttributeNS(W, 'val'));
     const indent = center ? 0.3 : leftTw / 11906; // ширина листа A4 в twips
-    text.split('\n').forEach((t, i) => out.push({ text: t, indent, gap: i === 0 && gap }));
+    text.split('\n').forEach((t, i) => out.push({ text: t, indent, gap: i === 0 && gap, style }));
     gap = false;
   }
   return out;

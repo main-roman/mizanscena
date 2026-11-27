@@ -5,7 +5,7 @@ import { store, $, $$, uid, esc, toast } from './store.js';
 import { ask } from './ui.js';
 import { sceneInfo } from './breakdown.js';
 import { castList, scheduledIds, dayInfo, nextDate, dayOutOfDays, stripClass, synopsisOf, clockText,
-  DAY_KINDS, isWeekend, isHoliday, movableDay, moveShift, datesFrom, moveToDate, swapDays, sortDays, shiftNo, objectOf, busyOn, contactLink, CONTACT_PH, variantTitle, newVariant, switchVariant, deleteVariant } from './schedmodel.js';
+  normalizeSchedule, DAY_KINDS, isWeekend, isHoliday, movableDay, moveShift, datesFrom, moveToDate, swapDays, sortDays, shiftNo, objectOf, busyOn, contactLink, CONTACT_PH, variantTitle, newVariant, switchVariant, deleteVariant } from './schedmodel.js';
 import { exportKPP } from './kppexport.js';
 import { setDur } from './scenes.js';
 import { openSides } from './split.js';
@@ -361,6 +361,7 @@ view.addEventListener('click', async e => {
   if (act === 'add-day') {
     sch.days.push({ id: 'day-' + uid(), date: nextDate(p), call: '08:00', wrap: '', lunch: '', weather: '', note: '', items: [], times: {}, kind: 'work', night: false, locked: false });
     if (sch.info.start) datesFrom(p, sch.info.start);
+    normalizeSchedule(p, uid);
     store.touch(); rerender();
     toast(`Добавлена смена ${sch.days.filter(d => d.kind === 'work').length}`);
   }
@@ -564,6 +565,7 @@ ctx.addEventListener('click', e => {
   sch.days.splice(gapAt, 0, { id: 'day-' + uid(), date: '', call: '08:00', wrap: '', lunch: '', weather: '', note: '', items: [], times: {}, kind, night: false, locked: false });
   // даты подряд от первого дня: всё после вставленного сдвигается на день
   if (sch.info.start) datesFrom(p, sch.info.start);
+  normalizeSchedule(p, uid);
   store.touch(); rerender();
   toast(`Вставлен ${kind === 'work' ? 'съёмочный день' : DAY_KINDS[kind].toLowerCase() + ' день'}${sch.info.start ? ': даты после него сдвинулись' : ''}`);
 });

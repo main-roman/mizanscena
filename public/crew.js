@@ -7,6 +7,8 @@ import { makeXlsx } from './xlsx.js';
 
 const project = () => store.project;
 const X = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+// ссылка на Telegram: «@ник», «ник» или t.me/ник
+const tgLink = v => { const m = String(v || '').trim().match(/^(?:https?:\/\/)?(?:t\.me\/|@)?([A-Za-z0-9_]{4,})$/); return m ? `<a class="cr-call" href="https://t.me/${m[1]}" target="_blank" rel="noopener" title="Написать в Telegram">↗</a>` : ''; };
 const title = s => s ? s.charAt(0) + s.slice(1).toLowerCase() : '';
 let query = '';
 
@@ -38,15 +40,15 @@ export function renderCrew() {
       <td class="cr-busy"><button class="linkbtn" data-busy="${esc(c.char)}">${busyText(row(c.char))}</button></td></tr>`;
   }).join('');
   const dept = d => {
-    const rows = people.filter(r => r.dept === d && match(r.role, r.name, r.phone, r.email, r.note));
+    const rows = people.filter(r => r.dept === d && match(r.role, r.name, r.phone, r.tg, r.note));
     if (query && !rows.length) return '';
     return `<section class="cr-dept" data-dept="${esc(d)}"><header><h2>${esc(d)} <span>${people.filter(r => r.dept === d).length || ''}</span></h2>
         <button class="linkbtn" data-add="${esc(d)}">+ человек</button></header>
-      ${rows.length ? `<div class="sl-wrap"><table class="cr-table"><thead><tr><th>Должность</th><th>Имя</th><th>Этап</th><th>Город</th><th>Телефон / Telegram</th><th>Почта</th><th>Заметка</th><th title="Показывать в блоке «Руководители группы» вызывного листа">В вызывном</th><th></th></tr></thead><tbody>
+      ${rows.length ? `<div class="sl-wrap"><table class="cr-table"><thead><tr><th>Должность</th><th>Имя</th><th>Этап</th><th>Город</th><th>Телефон</th><th>Telegram</th><th>Заметка</th><th title="Показывать в блоке «Руководители группы» вызывного листа">В вызывном</th><th></th></tr></thead><tbody>
         ${rows.map(r => `<tr data-row="${r.id}"><td><input data-f="role" value="${esc(r.role)}" placeholder="Должность" data-combo="cr-roles-${DEPARTMENTS.indexOf(d)}" autocomplete="off"></td><td><input data-f="name" value="${esc(r.name)}" placeholder="Имя и фамилия"></td>
           <td><select class="cr-status ${statusCls(r.status)}" data-f="status"><option value="">—</option>${STATUSES.map(x => `<option${x === r.status ? ' selected' : ''}>${x}</option>`).join('')}</select></td>
           <td><input data-f="city" value="${esc(r.city)}" placeholder="Город" class="cr-city"></td>
-          <td class="cr-phone"><input data-f="phone" value="${esc(r.phone)}" placeholder="${CONTACT_PH}">${tel(r.phone)}</td><td><input data-f="email" value="${esc(r.email)}" placeholder="почта"></td>
+          <td class="cr-phone"><input data-f="phone" value="${esc(r.phone)}" placeholder="${CONTACT_PH}">${tel(r.phone)}</td><td class="cr-tg"><input data-f="tg" value="${esc(r.tg)}" placeholder="@ник">${tgLink(r.tg)}</td>
           <td><input data-f="note" value="${esc(r.note)}" placeholder="Машина, смены, аллергии"></td>
           <td class="cr-lead"><input type="checkbox" data-f="lead"${r.lead ? ' checked' : ''} aria-label="В вызывном"></td>
           <td class="cr-x"><select data-move aria-label="Перенести в другой цех" title="Перенести в другой цех"><option value="">→</option>${DEPARTMENTS.filter(x => x !== d).map(x => `<option>${esc(x)}</option>`).join('')}</select><button class="ico" data-del="${r.id}" title="Убрать" aria-label="Убрать">${X}</button></td></tr>`).join('')}
@@ -92,7 +94,7 @@ view.addEventListener('change', e => {
   if (r && t.dataset.f === 'lead') { r.lead = t.checked; store.touch(); return; }
   if (r && t.dataset.f === 'status') { r.status = t.value; store.touch(); t.className = 'cr-status ' + statusCls(t.value); return; }
   if (r && t.matches('[data-move]') && t.value) { r.dept = t.value; store.touch(); rerender(); toast(`Перенесено: ${t.value}`); return; }
-  if (t.dataset.f === 'phone' || t.dataset.cast === 'phone') rerender(); // появится кнопка звонка
+  if (t.dataset.f === 'phone' || t.dataset.f === 'tg' || t.dataset.cast === 'phone') rerender(); // появится кнопка звонка
 });
 view.addEventListener('click', e => {
   const p = project(), b = e.target.closest('button');
@@ -104,7 +106,7 @@ view.addEventListener('click', e => {
     sch.cast = sch.cast.filter(c => c.char.toUpperCase() !== b.dataset.delchar); store.touch(); rerender(); return;
   }
   if (b.dataset.add) {
-    const r = { id: uid(), dept: b.dataset.add, role: '', name: '', phone: '', email: '', note: '', lead: false };
+    const r = { id: uid(), dept: b.dataset.add, role: '', name: '', phone: '', tg: '', note: '', lead: false };
     p.schedule.info.crew.push(r); store.touch(); query = ''; rerender(`[data-row="${r.id}"] [data-f="role"]`); return;
   }
   if (b.dataset.del) {
@@ -115,7 +117,7 @@ view.addEventListener('click', e => {
   const act = b.dataset.act;
   if (act === 'paste') { pasteDialog(); return; }
   if (act === 'fill') {
-    for (const d of DEPARTMENTS) for (const [role, lead] of ROLES[d] || []) p.schedule.info.crew.push({ id: uid(), dept: d, role, name: '', phone: '', email: '', note: '', lead });
+    for (const d of DEPARTMENTS) for (const [role, lead] of ROLES[d] || []) p.schedule.info.crew.push({ id: uid(), dept: d, role, name: '', phone: '', tg: '', note: '', lead });
     store.touch(); rerender(); toast('Должности расставлены: впишите имена');
   }
   if (act === 'pdf' || act === 'xlsx') exportCrew(p, act);
@@ -127,7 +129,7 @@ function lists(p) {
   const people = p.schedule.info.crew.filter(r => r.name || r.phone);
   return {
     cast: cast.filter(c => c.actor || c.phone).map(c => [title(c.char), c.actor, c.phone]),
-    depts: DEPARTMENTS.map(d => [d, people.filter(r => r.dept === d).map(r => [r.role, r.name, r.phone, r.email, r.note])]).filter(([, l]) => l.length),
+    depts: DEPARTMENTS.map(d => [d, people.filter(r => r.dept === d).map(r => [r.role, r.name, r.phone, r.tg, r.note])]).filter(([, l]) => l.length),
   };
 }
 function exportCrew(p, fmt) {
@@ -135,7 +137,7 @@ function exportCrew(p, fmt) {
   if (!cast.length && !depts.length) return toast('Впишите хотя бы одно имя или телефон');
   const name = safeName(p.name) + ', список группы';
   if (fmt === 'xlsx') {
-    const rows = [{ cells: [`Список группы «${p.name}»`], style: 1, height: 28, merge: true }, { cells: ['Должность / персонаж', 'Имя', 'Телефон', 'Почта', 'Заметка'], style: 3, height: 24 }];
+    const rows = [{ cells: [`Список группы «${p.name}»`], style: 1, height: 28, merge: true }, { cells: ['Должность / персонаж', 'Имя', 'Телефон', 'Telegram', 'Заметка'], style: 3, height: 24 }];
     if (cast.length) { rows.push({ cells: ['Актёры'], style: 4, height: 22, merge: true }); for (const c of cast) rows.push({ cells: [...c, '', ''], style: 5 }); }
     for (const [d, l] of depts) { rows.push({ cells: [d], style: 4, height: 22, merge: true }); for (const r of l) rows.push({ cells: r, style: 5 }); }
     download(makeXlsx({ name: 'Группа', widths: [30, 28, 18, 26, 30], rows, freeze: 3 }), name + '.xlsx');
@@ -143,16 +145,16 @@ function exportCrew(p, fmt) {
   }
   const tr = cells => `<tr>${cells.map(v => `<td>${esc(v || '')}</td>`).join('')}</tr>`;
   printHTML(`<div class="pr-head"><p>Список группы</p><h1>${esc(p.name)}</h1><p>${new Date().toLocaleDateString('ru-RU')}</p></div>
-    <table class="pr-table"><thead><tr><th>Должность / персонаж</th><th>Имя</th><th>Телефон</th><th>Почта</th><th>Заметка</th></tr></thead><tbody>
+    <table class="pr-table"><thead><tr><th>Должность / персонаж</th><th>Имя</th><th>Телефон</th><th>Telegram</th><th>Заметка</th></tr></thead><tbody>
     ${cast.length ? `<tr class="pr-scene"><th colspan="5">Актёры</th></tr>${cast.map(c => tr([...c, '', ''])).join('')}` : ''}
     ${depts.map(([d, l]) => `<tr class="pr-scene"><th colspan="5">${esc(d)}</th></tr>${l.map(tr).join('')}`).join('')}</tbody></table>`, 'size: A4; margin: 12mm;', name);
 }
 
 // ---------- вставка списка группы из таблицы (Google Таблицы, Excel) ----------
-// Столбцы узнаются по заголовкам: должность (или «кандидат»), этап, ФИО, город, контакты, почта, примечания.
+// Столбцы узнаются по заголовкам: должность (или «кандидат»), этап, ФИО, город, телефон, Telegram, примечания.
 const HEAD = [
   ['role', /должност|кандидат|позиц|роль|цех/i], ['status', /этап|статус|стади/i], ['name', /фио|имя|челов/i],
-  ['city', /город/i], ['phone', /контакт|телефон|тел\b|telegram|телеграм/i], ['email', /почт|e-?mail/i], ['note', /примеч|заметк|коммент/i],
+  ['city', /город/i], ['tg', /telegram|телеграм|\bтг\b/i], ['phone', /контакт|телефон|тел\b/i], ['note', /примеч|заметк|коммент/i],
 ];
 const normStatus = t => {
   const v = String(t || '').trim().toLowerCase();
@@ -170,7 +172,7 @@ export function parseCrew(text) {
   return lines.slice(hasHead ? 1 : 0).map(l => {
     const c = cells(l), g = k => (cols[k] !== undefined ? c[cols[k]] || '' : '');
     const role = g('role').replace(/\s+\d+$/, (m) => m), name = g('name'), city = g('city');
-    return { role: g('role'), name, status: normStatus(g('status')), city: /^(нейтрально|неизвестно|удалено)$/i.test(city) ? '' : city, phone: g('phone'), email: g('email'), note: [g('note'), /^(удалено)$/i.test(city) ? 'Удалённо' : ''].filter(Boolean).join('; ') };
+    return { role: g('role'), name, status: normStatus(g('status')), city: /^(нейтрально|неизвестно|удалено)$/i.test(city) ? '' : city, phone: g('phone'), tg: g('tg'), email: g('email'), note: [g('note'), /^(удалено)$/i.test(city) ? 'Удалённо' : ''].filter(Boolean).join('; ') };
   }).filter(r => r.role || r.name);
 }
 
@@ -202,9 +204,9 @@ export function importCrew(p, rows, mkid) {
   let added = 0, updated = 0;
   for (const r of rows) {
     const same = crew.find(c => low(c.role) === low(r.role) && (low(c.name) === low(r.name) || (!c.name && !c.phone)));
-    if (same) { for (const k of ['name', 'status', 'city', 'phone', 'email', 'note']) if (r[k]) same[k] = r[k]; updated++; continue; }
+    if (same) { for (const k of ['name', 'status', 'city', 'phone', 'tg', 'note']) if (r[k]) same[k] = r[k]; updated++; continue; }
     const dept = guessDept(r.role);
-    crew.push({ id: mkid(), dept, role: r.role, name: r.name, phone: r.phone, email: r.email, note: r.note, status: r.status, city: r.city, lead: !!r.name && !['Партнёры и контакты', 'Консультанты'].includes(dept) }); // в вызывной — все, кто уже есть, кроме меценатов и консультантов
+    crew.push({ id: mkid(), dept, role: r.role, name: r.name, phone: r.phone, tg: r.tg, note: r.note, status: r.status, city: r.city, lead: !!r.name && !['Партнёры и контакты', 'Консультанты'].includes(dept) }); // в вызывной — все, кто уже есть, кроме меценатов и консультантов
     added++;
   }
   return { added, updated };

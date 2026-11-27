@@ -2449,3 +2449,17 @@ tr:hover .cr-delchar { opacity: 1; }
 .sp-fr-add:hover { border-color: var(--ink); color: var(--ink); }
 .sp-fr-add svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 2; fill: none; }
 .sp-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+
+/* сбор группы: длинный текст целиком — поля растут, на листе и в PDF текст переносится */
+.cs-meetrow { align-items: flex-start; flex-wrap: wrap; }
+.cs-meetrow .cs-meet-t { padding-top: 2px; }
+.cs-meetrow textarea.cs-grow { display: block; flex: 1 1 260px; min-width: 0; min-height: 30px; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px; background: #F6F8F5; font: inherit; line-height: 1.4; resize: none; overflow: hidden; white-space: pre-wrap; transition: border-color .15s var(--ease), background .15s var(--ease); }
+.cs-meetrow textarea.cs-grow:hover { border-color: var(--line); }
+.cs-meetrow textarea.cs-grow:focus { outline: 0; border-color: var(--ink); background: #fff; }
+.cs-meetrow textarea.cs-meet-p { font-weight: 600; font-size: 14px; }
+.cs-meetrow textarea.cs-meet-n { flex-basis: 100%; font-size: 13px; color: #4A5559; }
+.cs-meetrow span.cs-meet-p, .cs-meetrow a.cs-meet-p, .cs-meetrow span.cs-meet-n { flex: 1 1 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; line-height: 1.4; }
+.cs-meetrow span.cs-meet-n { flex-basis: 100%; }
+.cs-meetrow span.cs-meet-n::before { content: none; }
+/* вызов цеха по стандарту — серым, пока не вписано своё */
+.cs-doc td.t-auto input[type=time] { color: var(--muted); }

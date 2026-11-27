@@ -52,6 +52,8 @@ const isChar = n => n.length > 1 && !NOT_CHAR.test(n);
 export function sceneInfo(p) {
   const blocks = p.script.blocks, out = [];
   const known = new Set(blocks.filter(b => b.type === 'character').map(b => cleanName(b.text)).filter(isChar));
+  // персонажи, вписанные в «Группу» руками (сценарий без реплик), тоже ищутся в тексте сцен
+  for (const c of (p.schedule && Array.isArray(p.schedule.cast) ? p.schedule.cast : [])) { const n = String(c.char || '').trim().toUpperCase(); if (n) known.add(n); }
   let cur = null;
   for (const b of blocks) {
     if (b.type === 'scene') { cur = { id: b.id, n: out.length + 1, text: b.text, ...parseHeading(b.text), lines: 0, blocks: [], speaking: new Set(), seen: new Set() }; out.push(cur); }
@@ -65,6 +67,8 @@ export function sceneInfo(p) {
     const text = s.blocks.filter(b => b.type === 'action' || b.type === 'paren').map(b => b.text.toUpperCase()).join('\n');
     for (const n of known) if (!s.speaking.has(n) && new RegExp(`(^|[^А-ЯЁA-Z])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u').test(text)) s.seen.add(n);
     s.eighths = Math.max(1, Math.round(s.lines / 58 * 8));
+    // и те, кого человек (или ИИ) записал персонажами в разборе этой сцены
+    for (const x of p.breakdown || []) if (x.sceneId === s.id && x.cat === 'cast' && !x.off) { const n = String(x.text || '').trim().toUpperCase(); if (n && !s.speaking.has(n)) s.seen.add(n); }
     s.chars = [...s.speaking, ...s.seen];
     // свой хронометраж, вписанный в разборе или в КПП, важнее того, что в скобках в шапке
     const own = p.schedule && p.schedule.scenes && p.schedule.scenes[s.id] && p.schedule.scenes[s.id].dur;
